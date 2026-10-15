@@ -12,7 +12,7 @@ export class TestElement {
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;}
  setAttribute(k:string,v:string){this.attributes[k]=v;}removeAttribute(k:string){delete this.attributes[k];}
  attachShadow(){this.shadowRoot=new TestElement('shadow',this.ownerDocument);return this.shadowRoot;}
- querySelector(selector:string):TestElement|null{return walk(this).find(n=>selector.startsWith('[data-key=')?n.dataset.key===selector.match(/"([^"]+)"/)?.[1]:selector.startsWith('.')?n.className.split(' ').includes(selector.slice(1)):n.tagName===selector)??null;}
+ querySelector(selector:string):TestElement|null{return walk(this).find(n=>selector.startsWith('[data-')?n.dataset[selector.match(/data-([\w-]+)=/)?.[1]??'']===selector.match(/"([^"]+)"/)?.[1]:selector.startsWith('.')?n.className.split(' ').includes(selector.slice(1)):n.tagName===selector)??null;}
  focus(){if(this.ownerDocument)this.ownerDocument.activeElement=this;}setSelectionRange(start:number){this.selectionStart=start;}
  getBoundingClientRect(){return {top:0,bottom:55,left:0,width:1000,height:600};}
  contains(n:TestElement){return walk(this).includes(n);}getRootNode(){return this;}

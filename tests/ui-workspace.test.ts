@@ -6,8 +6,8 @@ import { LocalStore } from '../panel/scan/store';
 import { ReadError } from '../panel/client/requests';
 import { snapshot, memoryStorage } from './fixtures/read';
 import { makeSong } from './fixtures/synthetic';
-function setup(options:{fail?:'read'|'targets'|'account';wait?:Promise<void>}={}) {
-  const calls={reads:0,metadata:0};const s=snapshot(3);const store=new LocalStore(memoryStorage());
+function setup(options:{fail?:'read'|'targets'|'account';wait?:Promise<void>;count?:number}={}) {
+  const calls={reads:0,metadata:0};const s=snapshot(options.count??3);const store=new LocalStore(memoryStorage());
   const scanner=createScanner({readLibrary:async()=>s,readUid:async()=>'7',readMetadata:async()=>{calls.metadata++;const {genres,bpm,language}=makeSong('1');return {genres,bpm,language};},store});
   const c=new PanelController({store,scanner,readLibrary:async()=>{calls.reads++;await options.wait;if(options.fail==='read')throw new ReadError('network');return s;},readUid:async()=>options.fail==='account'?'9':'7',readTargets:async()=>{if(options.fail==='targets')throw new ReadError('permission');return [];}});
   return {c,calls};
@@ -25,10 +25,19 @@ test('uncertain and read-only recovery reports never unlock successful result',(
 import {testDocument,walk} from './fixtures/dom';
 import {mountOrganizer} from '../panel/ui/entry';
 const tick=()=>new Promise(r=>setTimeout(r,280));
-test('workspace mounts only current page; collapse keeps atomic task alive and completes without focus theft',async()=>{
- const {doc,listeners}=testDocument();const {c}=setup();const app=mountOrganizer({document:doc,scope:{},controller:c});const host=doc.body.children[0],root=host.shadowRoot!;
+test('workspace mounts only current page; collapse keeps atomic task alive and completes without focus theft',async(t)=>{
+ const {doc,listeners}=testDocument();const {c}=setup();const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());const host=doc.body.children[0],root=host.shadowRoot!;
  const action=(key:string)=>{const e=walk(root).find(e=>e.dataset.action===key);assert.ok(e,key);return e;};
  assert.ok(action('prepare'));assert.equal(walk(root).some(n=>n.dataset.page==='filter'),false);
  const operation=c.prepareCollection();action('collapse').onclick!();const focus=doc.activeElement;await operation;await tick();assert.equal(action('workspace').hidden,true);assert.equal(doc.activeElement,focus);assert.match(action('entry').textContent,/完成/);
  app.show();await tick();assert.equal(action('workspace').hidden,false);assert.ok(walk(root).some(n=>n.dataset.page==='filter'));app.remove();assert.equal(listeners.size,0);assert.equal(doc.body.children.length,0);
+});
+
+test('203 songs paginate display only, checkbox keeps DOM/scroll/detail, filter edits reset page',async(t)=>{
+ const {doc}=testDocument(),{c}=setup({count:203});const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());await c.prepareCollection();c.model.setFilters({...c.model.state.filters,allSongs:true});c.changed();
+ const root=doc.body.children[0].shadowRoot!;const find=(key:string)=>{const e=walk(root).find(n=>n.dataset.action===key);assert.ok(e,key);return e;};const rows=()=>walk(root).filter(n=>n.className==='song');
+ assert.equal(rows().length,50);assert.match(root.textContent,/总入选 203 首/);assert.equal(find('to-write').disabled,false);
+ find('page-next').onclick!();assert.equal(rows()[0].dataset.songId,'51');rows()[0].onclick!();assert.match(find('song-detail').textContent,/合成歌曲/);const checkbox=walk(rows()[0]).find(n=>n.type==='checkbox')!;const list=find('song-list');list.scrollTop=120;checkbox.checked=false;checkbox.onchange!();assert.equal(c.model.preview().ids.length,202);assert.equal(find('song-list'),list);assert.equal(list.scrollTop,120);assert.equal(walk(rows()[0]).find(n=>n.type==='checkbox'),checkbox);assert.equal(find('song-detail').hidden,false);
+ find('page-next').onclick!();find('page-next').onclick!();find('page-next').onclick!();assert.equal(rows().length,3);find('page-prev').onclick!();find('page-prev').onclick!();find('page-prev').onclick!();find('page-prev').onclick!();assert.equal(c.model.preview().ids.includes('51'),false);
+ find('page-next').onclick!();const all=walk(root).find(n=>n.dataset.key==='all-songs')!;all.checked=false;all.onchange!();assert.equal(find('pagination').textContent.includes('1 /'),true);
 });

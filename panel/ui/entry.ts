@@ -62,7 +62,7 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   }
   let lastBusy=controller.isBusy;
   const unsubscribe=controller.subscribe(()=>{const immediate=!controller.isBusy||controller.isBusy!==lastBusy;lastBusy=controller.isBusy;if(immediate){if(renderTimer!==undefined){clearTimeout(renderTimer);renderTimer=undefined;}render();return;}if(renderTimer!==undefined)return;renderTimer=setTimeout(()=>{renderTimer=undefined;render();},250);});
-  const metricsTimer=setInterval(()=>{if(!state.collapsed)view.update(state);},1000);
+  const metricsTimer=setInterval(()=>{if(!state.collapsed&&state.page==='prepare')view.update(state);},1000);
   const accountTimer=setInterval(()=>{void controller.checkAccount();},15000);
   const onVisibility=()=>{if(doc.visibilityState==='visible')void controller.checkAccount();};
   const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();};

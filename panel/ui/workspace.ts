@@ -9,7 +9,7 @@ export function actionButton(doc:Document,label:string,key:string,action:()=>unk
 const phaseText:Record<string,string>={reading:'正在读取收藏',scanning:'正在扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'准备完成',error:'准备遇到问题'};
 export const duration=(ms:number)=>ms<60000?`${Math.floor(ms/1000)} 秒`:`${Math.floor(ms/60000)} 分 ${Math.floor(ms/1000)%60} 秒`;
 export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController):{update(state:WorkspaceState):void;dispose():void}{
- let state:WorkspaceState;let signature='';let disposed=false;const searches:Record<string,string>={};
+ let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;const searches:Record<string,string>={};
  const nav=textElement(doc,'nav','');nav.className='stages';nav.setAttribute('aria-label','整理阶段');
  const body=textElement(doc,'main','');body.className='workspace-body';
  const footer=textElement(doc,'footer','');footer.className='workspace-footer';
@@ -32,13 +32,16 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   else {const b=actionButton(doc,s.snapshot&&s.progress.phase!=='complete'?'继续准备':'开始整理','prepare',()=>s.snapshot&&s.progress.phase!=='complete'?controller.scan():controller.prepareCollection(),!controller.status().readReady);b.className='primary';footer.append(b);if(s.progress.phase==='complete'&&s.snapshot?.ids.length)footer.append(actionButton(doc,'前往筛选','to-filter',()=>go('filter')));}
  }
  function render(){
-  const s=controller.model.state;nav.replaceChildren();body.replaceChildren();footer.replaceChildren();
+  const s=controller.model.state;previewView=null;nav.replaceChildren();body.replaceChildren();footer.replaceChildren();
   for(const [i,page,label] of [[1,'prepare','准备收藏'],[2,'filter','筛选歌曲'],[3,'write','写入歌单'],[4,'result','整理结果']] as const){const b=actionButton(doc,`${i}  ${label}`,`nav-${page}`,()=>go(page),!canEnterPage(page,controller));b.setAttribute('aria-current',state.page===page?'step':'false');if(b.disabled)b.title=page==='result'?'完成写入并读回核对后可查看':'请先完成准备，并选择有效歌曲';nav.append(b);}
   body.dataset.page=state.page;
   if(state.page==='prepare')prepare();
   if(state.page==='filter'){
-   const layout=textElement(doc,'div','');layout.className='filter-layout';const sidebar=renderFilters(doc,controller.model,searches,changed);sidebar.className='filter-sidebar';const results=renderPreview(doc,controller.model,state.pages,changed);results.className='results';layout.append(sidebar,results);body.append(layout);
-   footer.append(textElement(doc,'strong',`总入选 ${controller.model.preview().ids.length} 首`));const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
+   const toggle=actionButton(doc,'筛选条件','toggle-filters',()=>{state.filterPanelOpen=!state.filterPanelOpen;changed();});toggle.className='filter-toggle';toggle.setAttribute('aria-expanded',String(state.filterPanelOpen));body.append(toggle);
+   const layout=textElement(doc,'div','');layout.className='filter-layout';layout.dataset.filters=String(state.filterPanelOpen);
+   const sidebar=renderFilters(doc,controller.model,searches,()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();});sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close);
+   previewView=renderPreview(doc,controller.model,{state,changed});layout.append(sidebar,previewView.element);body.append(layout);
+   const summary=textElement(doc,'div','');summary.className='selection-summary';summary.dataset.action='selection-summary';footer.append(summary);const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
   }
   if(state.page==='write'){
    const heading=textElement(doc,'h2','选择一个歌单，安放这次的共鸣。');body.append(heading,textElement(doc,'p',s.message));const editing=textElement(doc,'fieldset','');editing.disabled=controller.isBusy;editing.append(renderTarget(doc,controller.model,changed));body.append(editing,renderWriteControls(doc,controller));footer.append(actionButton(doc,'返回筛选','back-filter',()=>go('filter'),controller.isBusy));if(controller.isBusy)footer.append(actionButton(doc,'暂停写入','pause-write',()=>controller.pause()));
@@ -49,5 +52,19 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   }
  }
  function updateMetrics(){const metrics=body.querySelector('[data-action="scan-metrics"]');if(!metrics)return;const m=controller.scanMetrics;metrics.textContent=`本次用时 ${duration(m.elapsedMs)}  ·  ${m.ratePerMinute===null?'速度正在估算':`${Math.round(m.ratePerMinute)} 首/分钟`}  ·  ${m.remainingMs===null?'剩余时间暂不可估算':m.remainingMs===0?'准备完成':`预计剩余约 ${duration(m.remainingMs)}`}`;}
- return {update(next){if(disposed)return;state=next;if(state.collapsed)return;const s=controller.model.state;const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.isBusy]);if(key!==signature){const oldPage=body.dataset.page;const scroll=body.scrollTop;const focused=(root.getRootNode?.() as ShadowRoot)?.activeElement as HTMLInputElement|null;const focusKey=focused?.dataset.key;const caret=focused?.selectionStart;signature=key;render();body.scrollTop=oldPage===state.page?scroll:0;if(focusKey){const input=root.querySelector(`[data-key="${focusKey}"]`) as HTMLInputElement|null;input?.focus();if(caret!=null&&['search','text'].includes(input?.type??''))input?.setSelectionRange(caret,caret);}else if(oldPage!==state.page){const title=body.querySelector('h2');if(title){title.tabIndex=-1;title.focus();}}}updateMetrics();},dispose(){disposed=true;nav.remove();body.remove();footer.remove();}};
+ function update(next:WorkspaceState){
+  if(disposed)return;state=next;if(state.collapsed)return;const s=controller.model.state;
+  const filters=JSON.stringify(s.filters);if(lastFilters&&filters!==lastFilters){state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;}lastFilters=filters;
+  const filterKey=JSON.stringify([state.contextKey,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
+  const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.isBusy]);
+  const filterStable=state.page==='filter'&&body.dataset.page==='filter'&&filterIdentity===filterKey&&previewView;
+  if(key!==signature&&!filterStable){const oldPage=body.dataset.page;const scroll=body.scrollTop;const focused=(root.getRootNode?.() as ShadowRoot)?.activeElement as HTMLInputElement|null;const focusKey=focused?.dataset.key;const caret=focused?.selectionStart;signature=key;render();filterIdentity=filterKey;body.scrollTop=oldPage===state.page?scroll:0;if(focusKey){const input=root.querySelector(`[data-key="${focusKey}"]`) as HTMLInputElement|null;input?.focus();if(caret!=null&&['search','text'].includes(input?.type??''))input?.setSelectionRange(caret,caret);}else if(oldPage!==state.page){const title=body.querySelector('h2');if(title){title.tabIndex=-1;title.focus();}}}
+  if(state.page==='filter'){
+   previewView?.update(state);const summary=footer.querySelector('[data-action="selection-summary"]');if(summary){summary.replaceChildren(textElement(doc,'strong',`总入选 ${controller.model.preview().ids.length} 首`),textElement(doc,'small',`人工加入 ${s.added.size} · 排除 ${s.removed.size}`));}
+   const next=footer.querySelector('[data-key="to-write"]') as HTMLButtonElement|null;if(next)next.disabled=!canEnterPage('write',controller);
+   const navWrite=nav.querySelector('[data-key="nav-write"]') as HTMLButtonElement|null;if(navWrite)navWrite.disabled=!canEnterPage('write',controller);
+  }
+  updateMetrics();
+ }
+ return {update,dispose(){disposed=true;nav.remove();body.remove();footer.remove();}};
 }
