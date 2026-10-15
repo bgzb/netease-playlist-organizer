@@ -27,7 +27,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   details.append(textElement(doc,'p',s.persisted?'扫描检查点已保存，继续时会重新核对账号与收藏。':'进度仅保留在本次页面；未保存的进度不能跨重启恢复。'));
   for(const [key,label] of [['genres','曲风'],['bpm','BPM'],['language','语种']] as const)if(s.snapshot?.songs.some(song=>song[key].reason?.includes('维度已暂停')))details.append(textElement(doc,'p',`${label}来源暂不可用，可在更多中强制更新。`));
   if(s.recoveryJournal)details.append(textElement(doc,'p','保留了一份写入日志。请先完成准备，再到写入页显式恢复核对。'));status.append(details);box.append(status);body.append(box);
-  if(controller.isBusy)footer.append(actionButton(doc,s.progress.phase==='pausing'?'正在暂停…':'暂停准备','pause',()=>controller.pause(),s.progress.phase==='pausing'));
+  if(controller.isBusy)footer.append(actionButton(doc,s.progress.phase==='pausing'?'正在暂停…':'暂停准备','pause',()=>controller.pause(),controller.isPausing));
   else if(s.snapshot&&s.progress.phase==='paused'&&!s.persisted){footer.append(actionButton(doc,'重试保存并继续','retry-storage',()=>controller.retryPersistence()),actionButton(doc,'仅本页继续','page-only',()=>{controller.continuePageOnly();return controller.scan();}));}
   else {const b=actionButton(doc,s.snapshot&&s.progress.phase!=='complete'?'继续准备':'开始整理','prepare',()=>s.snapshot&&s.progress.phase!=='complete'?controller.scan():controller.prepareCollection(),!controller.status().readReady);b.className='primary';footer.append(b);if(s.progress.phase==='complete'&&s.snapshot?.ids.length)footer.append(actionButton(doc,'前往筛选','to-filter',()=>go('filter')));}
  }
@@ -39,7 +39,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   if(state.page==='filter'){
    const toggle=actionButton(doc,'筛选条件','toggle-filters',()=>{state.filterPanelOpen=!state.filterPanelOpen;changed();});toggle.className='filter-toggle';toggle.setAttribute('aria-expanded',String(state.filterPanelOpen));body.append(toggle);
    const layout=textElement(doc,'div','');layout.className='filter-layout';layout.dataset.filters=String(state.filterPanelOpen);
-   const sidebar=renderFilters(doc,controller.model,searches,()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();});sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close);
+   const filterContent=renderFilters(doc,controller.model,searches,()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();});const sidebar=textElement(doc,'section','');sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close,filterContent);
    previewView=renderPreview(doc,controller.model,{state,changed});layout.append(sidebar,previewView.element);body.append(layout);
    const summary=textElement(doc,'div','');summary.className='selection-summary';summary.dataset.action='selection-summary';footer.append(summary);const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
   }
@@ -47,8 +47,8 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
    if(!controller.isBusy&&!s.writeReview){body.append(textElement(doc,'h2','把这次的共鸣，放进歌单。'),textElement(doc,'p','新建一个私密空间，或继续丰富已有的收藏。'));const editing=textElement(doc,'fieldset','');editing.disabled=controller.isBusy;targetMode=s.target?.kind??targetMode;editing.append(renderTarget(doc,controller.model,{changed,mode:targetMode,setMode:mode=>{targetMode=mode;}}));body.append(editing);}
    if(s.writeReview?.taskId!==reviewTask){reviewPage=0;reviewTask=s.writeReview?.taskId??null;}
    const back=actionButton(doc,'返回筛选','back-filter',()=>go('filter'),controller.isBusy);footer.append(back);body.append(renderWriteControls(doc,controller,{footer,page:reviewPage,setPage:page=>{reviewPage=page;signature='';changed();}}));
-   if(controller.isBusy)footer.append(actionButton(doc,s.progress.phase==='pausing'?'正在暂停…':'暂停写入','pause-write',()=>controller.pause(),s.progress.phase==='pausing'));
-   const notice=textElement(doc,'p',s.message);notice.className='notice';body.append(notice);
+   if(controller.isBusy)footer.append(actionButton(doc,controller.isPausing?'正在暂停…':'暂停写入','pause-write',()=>controller.pause(),controller.isPausing));
+   if(controller.isBusy||s.recoveryReviewed||controller.uiOperation?.status==='failed'){const notice=textElement(doc,'p',s.message);notice.className='notice';body.append(notice);}
   }
   if(state.page==='result'){
    const r=s.writeReport!;const box=textElement(doc,'section','');box.className='result-page';box.append(textElement(doc,'span','✓'),textElement(doc,'h2','整理完成，已读回核对。'),textElement(doc,'p',`目标歌单 ${s.targets.find(t=>t.id===r.targetId)?.name??(s.recoveryJournal?.plan.target.kind==='new'?s.recoveryJournal.plan.target.name:r.targetId)}`),textElement(doc,'strong',`实际新增 ${r.addedIds.length} 首`),textElement(doc,'p',`已存在 ${r.alreadyPresentIds.length} 首 · 清单总数 ${r.addedIds.length+r.alreadyPresentIds.length} 首`));body.append(box);
