@@ -10,7 +10,9 @@ fi
 files=()
 while IFS= read -r -d '' file; do
     case "$file" in
-        .git/*|node_modules/*|work/*|.superpowers/*|launcher/.build/*|cache/*|caches/*|*/cache/*|*/caches/*|private-evidence/*|*/private-evidence/*|*/.DS_Store|.DS_Store|docs/read-verification.md|docs/access-verification.md|docs/design.md|docs/implementation-plan.md) continue ;;
+        README.md|CHANGELOG.md|THIRD_PARTY_NOTICES.md|docs/INSTALL.md) ;;
+        *.md|docs/*) continue ;;
+        .git/*|node_modules/*|work/*|.superpowers/*|launcher/.build/*|cache/*|caches/*|*/cache/*|*/caches/*|private-evidence/*|*/private-evidence/*|*/.DS_Store|.DS_Store) continue ;;
     esac
     files+=("$file")
 done < <(git ls-tree -r -z --name-only HEAD)

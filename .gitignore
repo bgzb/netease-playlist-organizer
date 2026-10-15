@@ -21,3 +21,11 @@ launcher/.build/
 *.app/
 *.zip
 *.dmg
+
+# Keep only user-facing essentials in Git; retain local planning and reports.
+*.md
+/docs/*
+!/README.md
+!/CHANGELOG.md
+!/THIRD_PARTY_NOTICES.md
+!/docs/INSTALL.md

@@ -99,7 +99,7 @@ export class Scanner {
       }
       await guard();
       // Reload only the journal so a newer writer checkpoint cannot be overwritten by a scan.
-      const latest = this.options.store.load(input.uid);
+      const latest = this.options.store.loadWriteJournal(input.uid);
       const next: PersistedState = {
         schemaVersion: 1, uid: input.uid,
         scan: { snapshot, completedIds: [...completed], cache, phase, updatedAt: now() },
@@ -135,10 +135,11 @@ export class Scanner {
 
       const prior = state?.scan;
       if (prior?.snapshot.revision === snapshot.revision && prior.snapshot.sourcePlaylistId === snapshot.sourcePlaylistId) {
+        const priorCompleted = new Set(prior.completedIds);
         // Partial pause results stay visible while their sources are rechecked on resume.
         // They are not completed cache hits, and never skip an unfinished metadata operation.
         snapshot.songs.forEach((song, index) => {
-          if (!prior.completedIds.includes(song.id)) {
+          if (!priorCompleted.has(song.id)) {
             const previous = prior.snapshot.songs[index];
             song.genres = previous.genres;
             song.bpm = previous.bpm;

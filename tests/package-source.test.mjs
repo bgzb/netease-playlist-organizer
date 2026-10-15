@@ -7,12 +7,13 @@ import {execFileSync} from 'node:child_process';
 test('source archive includes committed synthetic sources and excludes private/build paths; dirty tree is rejected',()=>{
   // Tests are bundled under work/test-build; locate the repository via cwd used by build-panel.
   const source=join(process.cwd(),'scripts/package-source.sh');
+  const internalDocs=['CONTRIBUTING.md','SECURITY.md','docs/PUBLISHING.md','docs/RELEASE_NOTES.md','docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md','docs/release-validation-2026-10-15.md','docs/runtime-contract.md','docs/scan-performance.md','docs/future-report.md','tests/test-report.md','NOTES.md'];
   const fixture=mkdtempSync(join(tmpdir(),'ncm-source-package-'));
   const run=(cmd,args)=>execFileSync(cmd,args,{cwd:fixture,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   try {
     mkdirSync(join(fixture,'scripts'));copyFileSync(source,join(fixture,'scripts/package-source.sh'));
-    for(const path of ['README.md','package-lock.json','tests/fixtures/synthetic.ts','work/private.json','node_modules/private.txt','.superpowers/private.md','launcher/.build/private.txt','caches/private.txt','docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md','LICENSE','docs/INSTALL.md','docs/PUBLISHING.md','.github/workflows/ci.yml','.nvmrc']) {
-      mkdirSync(dirname(join(fixture,path)),{recursive:true});writeFileSync(join(fixture,path),path.includes('private')||['docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md'].includes(path)?'PRIVATE_DATA /Users/private-person/secret':'SYNTHETIC_SOURCE');
+    for(const path of ['README.md','package-lock.json','tests/fixtures/synthetic.ts','work/private.json','node_modules/private.txt','.superpowers/private.md','launcher/.build/private.txt','caches/private.txt','docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md','LICENSE','CHANGELOG.md','THIRD_PARTY_NOTICES.md','docs/INSTALL.md','.github/workflows/ci.yml','.nvmrc',...internalDocs]) {
+      mkdirSync(dirname(join(fixture,path)),{recursive:true});writeFileSync(join(fixture,path),path.includes('private')||internalDocs.includes(path)?'PRIVATE_DATA /Users/private-person/secret':'SYNTHETIC_SOURCE');
     }
     writeFileSync(join(fixture,'.gitignore'),'work/\n');
     run('git',['init','-q','-b','main']);run('git',['add','-f','.']);
@@ -20,8 +21,8 @@ test('source archive includes committed synthetic sources and excludes private/b
     run('/bin/bash',['scripts/package-source.sh']);
     const archive=join(fixture,'work/dist/网易云歌单整理源码.zip');
     const list=run('/usr/bin/unzip',['-Z1',archive]);
-    for(const path of ['README.md','package-lock.json','tests/fixtures/synthetic.ts','LICENSE','docs/INSTALL.md','docs/PUBLISHING.md','.github/workflows/ci.yml','.nvmrc'])assert.ok(list.includes('netease-playlist-organizer/'+path));
-    for(const path of ['work/','node_modules/','.superpowers/','.build/','caches/','docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md','.git/'])assert.equal(list.includes(path),false);
+    for(const path of ['README.md','package-lock.json','tests/fixtures/synthetic.ts','LICENSE','CHANGELOG.md','THIRD_PARTY_NOTICES.md','docs/INSTALL.md','.github/workflows/ci.yml','.nvmrc'])assert.ok(list.includes('netease-playlist-organizer/'+path));
+    for(const path of ['work/','node_modules/','.superpowers/','.build/','caches/','docs/read-verification.md','docs/access-verification.md','docs/design.md','docs/implementation-plan.md','.git/',...internalDocs])assert.equal(list.includes(path),false);
     assert.equal(run('/usr/bin/unzip',['-p',archive]).includes('PRIVATE_DATA'),false);
     assert.equal(run('/usr/bin/unzip',['-p',archive]).includes('/Users/private-person/'),false);
     const before=readFileSync(archive);writeFileSync(join(fixture,'README.md'),'DIRTY_SOURCE');
@@ -49,5 +50,24 @@ test('public export extracts committed ZIP without history and refuses dirty sou
     writeFileSync(join(fixture,'README.md'),'DIRTY');
     assert.throws(()=>run('/bin/bash',['scripts/export-public.sh','public-next']));
     assert.throws(()=>readFileSync(join(fixture,'work/public-next/README.md')));
+  } finally {rmSync(fixture,{recursive:true,force:true});}
+});
+
+
+test('repository ignore rules keep essential docs and code while excluding internal reports',()=>{
+  const fixture=mkdtempSync(join(tmpdir(),'ncm-document-policy-'));
+  const run=(cmd,args)=>execFileSync(cmd,args,{cwd:fixture,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  try {
+    copyFileSync(join(process.cwd(),'.gitignore'),join(fixture,'.gitignore'));
+    const kept=['README.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','LICENSE','docs/INSTALL.md','tests/scan.test.ts','launcher/Tests/Example.swift'];
+    const ignored=['CONTRIBUTING.md','SECURITY.md','docs/PUBLISHING.md','docs/design.md','docs/release-validation-2026-10-15.md','docs/future-report.md','tests/test-report.md','NOTES.md'];
+    for(const name of [...kept,...ignored]) {
+      mkdirSync(dirname(join(fixture,name)),{recursive:true});writeFileSync(join(fixture,name),'fixture');
+    }
+    run('git',['init','-q','-b','main']);
+    run('git',['add','.']);
+    const tracked=run('git',['ls-files']).split('\n');
+    for(const name of kept)assert.ok(tracked.includes(name),name);
+    for(const name of ignored)assert.equal(tracked.includes(name),false,name);
   } finally {rmSync(fixture,{recursive:true,force:true});}
 });

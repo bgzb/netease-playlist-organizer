@@ -29,7 +29,7 @@ function journal(v:unknown,uid:string):WriteJournal|null {
 function checkpoint(v:unknown,uid:string):ScanCheckpoint|null {
   if(v===null)return null;const o=obj(v),source=snapshot(o.snapshot,uid),cache:Record<string,CacheEntry>={};
   for(const [key,value] of Object.entries(obj(o.cache))){const entry=obj(value),record=song(entry.song),times=obj(entry.updatedAt);if(id(key)!==record.id)throw new ReadError('structure');cache[key]={song:record,updatedAt:{genres:number(times.genres),bpm:number(times.bpm),language:number(times.language)}};}
-  const completedIds=ids(o.completedIds);if(completedIds.some(id=>!source.ids.includes(id)))throw new ReadError('structure');
+  const completedIds=ids(o.completedIds),sourceIds=new Set(source.ids);if(completedIds.some(id=>!sourceIds.has(id)))throw new ReadError('structure');
   return {snapshot:source,cache,completedIds,phase:one(o.phase,['reading','scanning','pausing','paused','complete','error']),updatedAt:number(o.updatedAt)};
 }
 function sanitize(value:unknown,uid:string):PersistedState {
@@ -37,11 +37,31 @@ function sanitize(value:unknown,uid:string):PersistedState {
   return {schemaVersion:1,uid,scan:checkpoint(o.scan,uid),writeJournal:journal(o.writeJournal,uid)};
 }
 export class LocalStore {
+  // Cache only the last successfully stored bytes and an encoded, detached journal.
+  // A different account, external writer, deletion or corrupt value invalidates the hit.
+  private savedJournal: {account:string;raw:string;encoded:string}|undefined;
   constructor(private readonly storage:StorageLike=globalThis.localStorage){}
   load(uid:string):PersistedState|null {try{const account=id(uid);const raw=this.storage.getItem(PREFIX+account);return raw===null?null:sanitize(JSON.parse(raw),account);}catch{return null;}}
+  // Scan checkpoints need the latest writer journal, not a restored song/cache copy.
+  // Always re-read storage; validate the envelope and journal independently of scan data.
+  loadWriteJournal(uid:string):Pick<PersistedState,'writeJournal'>|null {
+    try {
+      const account=id(uid),raw=this.storage.getItem(PREFIX+account);
+      if(raw===null)return null;
+      if(this.savedJournal?.account===account&&this.savedJournal.raw===raw)
+        return {writeJournal:JSON.parse(this.savedJournal.encoded) as WriteJournal|null};
+      const value=obj(JSON.parse(raw));
+      if(value.schemaVersion!==1||id(value.uid)!==account)return null;
+      return {writeJournal:journal(value.writeJournal,account)};
+    } catch {return null;}
+  }
   save(uid:string,state:PersistedState):void {
     const account=id(uid),safe=sanitize(state,account);
-    try{this.storage.setItem(PREFIX+account,JSON.stringify(safe));}catch{throw new ReadError('storage');}
+    try {
+      const raw=JSON.stringify(safe);
+      this.storage.setItem(PREFIX+account,raw);
+      this.savedJournal={account,raw,encoded:JSON.stringify(safe.writeJournal)};
+    } catch {throw new ReadError('storage');}
   }
   clearOtherAccounts(uid:string):void {
     const keep=PREFIX+id(uid),keys:string[]=[];for(let i=0;i<this.storage.length;i++){const key=this.storage.key(i);if(key?.startsWith(PREFIX)&&key!==keep)keys.push(key);}

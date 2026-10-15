@@ -16,7 +16,8 @@
     "test:write": "node scripts/build-panel.mjs --test tests/writer.test.ts",
     "verify:offline": "npm run typecheck && npm test && node scripts/verify-offline.mjs",
     "verify:read": "node --experimental-websocket scripts/verify-read.mjs",
-    "export:public": "bash scripts/export-public.sh"
+    "export:public": "bash scripts/export-public.sh",
+    "benchmark:scan": "node scripts/benchmark-scan.mjs"
   },
   "devDependencies": {
     "@types/node": "20.19.0",

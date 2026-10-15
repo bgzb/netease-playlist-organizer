@@ -26,7 +26,7 @@
 
 ## 已知限制与验证范围
 
-- 曾出现一次冷启动断连而客户端稍后就绪，失败子条件尚未捕获；后续成功运行不能证明已经修复。可从控制窗口手动重试，工具不会持续自动重启客户端。
+- 冷启动断连在前期出现，用户后续功能验证未再复现，当前不作为阻塞项；尚未证明所有环境均不会复现。若再次出现可从控制窗口手动重试，工具不会持续自动重启客户端。
 - 元数据可能缺失，客户端内部能力变化会使读取拒绝或暂停；网络、登录、权限或限流问题也会暂停扫描。
 - 用户曾亲自测试写入流程；离线合成测试另外覆盖读回、去重和账号边界。这不代表所有账号、客户端版本或写入规模都已验收。
 - 预览包使用现有图标，未公证；本机干净源码目录验证与 GitHub CI 配置均不代表第二台 Mac 或云端 CI 已通过。
@@ -41,10 +41,16 @@ npm run verify:offline
 bash scripts/swift-local.sh test --package-path launcher
 npm run build:panel
 bash scripts/build-app.sh
+# 源码包只包含干净已提交 HEAD
+bash scripts/package-source.sh
 ```
 
 `verify:offline` 包含类型检查、合成 TS/JS 测试及重新构建的实际面板入口冒烟测试，原生测试使用合成传输和进程状态，不启动真实客户端。产物在 `work/dist/`；发布使用密封 ZIP，构建会解压检查签名、arm64 架构和面板内容。裸构建 `.app` 不作为额外发布入口。Swift 辅助脚本只在项目 `work/` 复制公开工具链接口，避免特定 CLT 接口不匹配，不修改系统工具链。
 
-维护者只读探针 `npm run verify:read` 需要已由启动器连接的受支持客户端，不能用于打开调试监听；日常构建和 CI 不运行该命令。接口契约见 [runtime-contract](docs/runtime-contract.md)。
+合成扫描基准 `npm run benchmark:scan` 使用 1419 首合成数据、固定 1ms 依赖延时，串行运行三次，仅输出聚合计时。它用于比较扫描器本地开销，省略真实网络和界面渲染，不能据此推断真实账号速度。
 
-版本发布步骤见 [发布说明](docs/PUBLISHING.md)，贡献与问题报告见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+维护者只读探针 `npm run verify:read` 需要已由启动器连接的受支持客户端，不能用于打开调试监听；日常构建和 CI 不运行该命令。
+
+`npm run export:public -- public-clean` 可将干净提交的源码导出到 `work/public-clean/`，不携带 Git 历史；已有导出目录不会被覆盖。命令不创建远端、不推送或发布。
+
+Git 和源码包只保留源码、自动化测试、构建配置，以及 README、CHANGELOG、安装说明和许可证。设计、实施计划、接入验证、测试报告与发布验收记录仅保存在本地，不纳入后续提交或源码包。新增 Markdown 默认忽略，必要公开文档需在 `.gitignore` 和打包脚本中明确允许。
