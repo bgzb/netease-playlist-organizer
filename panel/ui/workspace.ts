@@ -97,14 +97,14 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
    if(controller.isBusy||s.recoveryReviewed){const notice=textElement(doc,'p',s.message);notice.className='notice';body.append(notice);}
   }
   if(state.page==='result'){
-   const r=s.writeReport!;const box=textElement(doc,'section','');box.className='result-page';box.append(textElement(doc,'span','✓'),textElement(doc,'h2','整理完成，已读回核对。'),textElement(doc,'p',`目标歌单 ${s.targets.find(t=>t.id===r.targetId)?.name??(s.recoveryJournal?.plan.target.kind==='new'?s.recoveryJournal.plan.target.name:r.targetId)}`),textElement(doc,'strong',`实际新增 ${r.addedIds.length} 首`),textElement(doc,'p',`已存在 ${r.alreadyPresentIds.length} 首 · 清单总数 ${r.addedIds.length+r.alreadyPresentIds.length} 首`));body.append(box);
-   const resultContext=state.contextKey,feedback=textElement(doc,'p','');feedback.className='notice';feedback.setAttribute('role','status');feedback.hidden=true;box.append(feedback);
+   const r=s.writeReport!;const box=textElement(doc,'section','');box.className='result-page';box.append(textElement(doc,'span','✓'),textElement(doc,'h2','整理完成，已读回核对。'),textElement(doc,'p',`目标歌单 ${s.targets.find(t=>t.id===r.targetId)?.name??(s.recoveryJournal?.plan.target.kind==='new'?s.recoveryJournal.plan.target.name:r.targetId)}`),textElement(doc,'strong',`实际新增 ${r.addedIds.length} 首`),textElement(doc,'p',`已存在 ${r.alreadyPresentIds.length} 首 · 清单总数 ${r.addedIds.length+r.alreadyPresentIds.length} 首`));
+   const resultContext=state.contextKey,feedback=textElement(doc,'p','');feedback.className='recovery-notice';feedback.dataset.action='open-target-feedback';feedback.setAttribute('role','status');feedback.hidden=true;body.append(feedback,box);
    const open=actionButton(doc,'打开目标歌单','open-target',()=>{
     const latest=controller.model.state.writeReport;
     if(!canEnterPage('result',controller)||state.contextKey!==resultContext||!latest||latest.taskId!==r.taskId||latest.targetId!==r.targetId||!validPlaylistId(latest.targetId))return;
     let opened=false;try{opened=navigatePlaylist(latest.targetId);}catch{/* Host navigation is optional; never display raw errors. */}
     if(opened){state.collapsed=true;state.moreMenuOpen=false;changed();}
-    else {feedback.hidden=false;feedback.textContent='当前客户端暂时无法打开，请在网易云中按目标名称查找该歌单。';}
+    else {feedback.hidden=false;feedback.textContent='当前客户端暂时无法打开，请在网易云中按目标名称查找该歌单。';feedback.scrollIntoView?.({block:'nearest'});}
    },!validPlaylistId(r.targetId));footer.append(open);
    footer.append(actionButton(doc,'返回筛选','back-filter',()=>go('filter')));const finish=actionButton(doc,'结束整理','finish',()=>{const targets=s.targets;controller.model.clearSelection();s.targets=targets;s.message='本次整理已结束，准备数据与写入日志已保留。';Object.assign(s,{writeReview:null,confirmation:null,writeProgress:null,writeReport:null});state.page='filter';state.collapsed=false;state.resultGroup='matched';state.filterPanelOpen=false;state.moreMenuOpen=false;state.recoveryMode=false;state.detailSongId=null;state.pages={matched:0,unknown:0,unmatched:0};changed();});finish.className='primary';footer.append(finish);
   }
