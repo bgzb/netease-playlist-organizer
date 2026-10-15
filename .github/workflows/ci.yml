@@ -1,0 +1,31 @@
+name: Offline checks and sealed build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Confirm supported architecture
+        run: test "$(uname -m)" = arm64
+      - name: Install locked build dependencies
+        run: npm ci --cache ./work/npm-cache --registry=https://registry.npmjs.org
+      - name: Offline TypeScript tests and actual entry smoke
+        run: npm run verify:offline
+      - name: Synthetic native suite
+        run: bash scripts/swift-local.sh test --package-path launcher
+      - name: Build actual panel and sealed ad-hoc application
+        run: |
+          npm run build:panel
+          bash scripts/build-app.sh

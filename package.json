@@ -1,0 +1,27 @@
+{
+  "name": "netease-playlist-organizer",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "test": "node scripts/build-panel.mjs --test",
+    "test:core": "node scripts/build-panel.mjs --test tests/normalize.test.ts tests/filter.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build:panel": "node scripts/build-panel.mjs",
+    "test:read": "node scripts/build-panel.mjs --test tests/capabilities.test.ts tests/library.test.ts tests/scan.test.ts tests/store.test.ts",
+    "test:ui-state": "node scripts/build-panel.mjs --test tests/ui-selection.test.ts",
+    "test:write": "node scripts/build-panel.mjs --test tests/writer.test.ts",
+    "verify:offline": "npm run typecheck && npm test && node scripts/verify-offline.mjs",
+    "verify:read": "node --experimental-websocket scripts/verify-read.mjs",
+    "export:public": "bash scripts/export-public.sh"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "license": "MIT"
+}

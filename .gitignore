@@ -1,0 +1,23 @@
+node_modules/
+work/
+.superpowers/
+launcher/.build/
+.DS_Store
+
+# Local editor/environment files and credentials
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+
+# Logs and downloadable build artifacts belong outside source control
+*.log
+*.ndjson
+*.app/
+*.zip
+*.dmg
