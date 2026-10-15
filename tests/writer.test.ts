@@ -113,7 +113,7 @@ test('explicit candidate adoption requires a fresh target review and prevents an
 });
 
 import * as targetUi from '../panel/ui/target';
-const renderWriteControls=(targetUi as any).renderWriteControls;
+const renderWriteControls=(doc:Document,c:any,page=0)=>{const footer=doc.createElement('footer'),root=doc.createElement('div');root.append((targetUi as any).renderWriteControls(doc,c,{footer,page,setPage:()=>{}}),footer);return root;};
 function testDocument() {
   class Element {
     children:Element[]=[];dataset:Record<string,string>={};disabled=false;onclick:(()=>unknown)|null=null;private text='';
@@ -127,7 +127,7 @@ test('actual confirmation renderer shows every selected song/manual flag and dis
   const doc=testDocument();assert.equal(typeof renderWriteControls,'function','final write controls not implemented');
   let root:any=renderWriteControls(doc,c);const all=(n:any):any[]=>[n,...n.children.flatMap(all)];
   const review=all(root).find(n=>n.dataset.key==='write-review');assert.ok(review);review.onclick();assert.equal(f.calls.length,0);
-  root=renderWriteControls(doc,c);const rows=all(root).filter(n=>n.dataset.songId);assert.equal(rows.length,53);assert.deepEqual(rows.map(n=>n.dataset.songId),snapshot(53).ids);
+  root=renderWriteControls(doc,c);const rows=all(root).filter(n=>n.dataset.songId);assert.equal(rows.length,50);const rest=all(renderWriteControls(doc,c,1)).filter(n=>n.dataset.songId);assert.equal(rest.length,3);assert.deepEqual([...rows,...rest].map(n=>n.dataset.songId),snapshot(53).ids);
   assert.match(root.textContent,/人工加入/);assert.match(root.textContent,/私密/);assert.match(root.textContent,/<svg onload=alert\(1\)>/);assert.equal(all(root).some(n=>n.tagName==='svg'),false);
   const button=all(root).find(n=>n.dataset.key==='write-confirm');assert.ok(button);await button.onclick();assert.equal(f.tracks.size,53);c.remove();
 });

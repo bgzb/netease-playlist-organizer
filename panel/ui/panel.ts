@@ -6,6 +6,7 @@ import { CollectionChangedError, type Scanner } from '../scan/scan';
 import type { LocalStore } from '../scan/store';
 import type { Writer, RecoveryCandidate } from '../write/writer';
 import { newJournal, saveJournal, copyJson } from '../write/journal';
+import { ScanProgressMeter } from './progress';
 import { ADAPTER_VERSION } from '../client/capabilities';
 import { writeReasonText, type TargetOption } from './target';
 export { readTargets } from './target';
@@ -23,6 +24,8 @@ const emptyFilters = (): Filters => ({ genres: [], languages: [], artistIds: [],
 const emptyResult = (): FilterResult => ({ matched: [], unknown: [], unmatched: [], reasons: {} });
 export class PanelModel {
   private revision = 0;
+  private libraryRevision=0;
+  get libraryVersion():number{return this.libraryRevision;}
   constructor(private readonly selectionChanged:()=>void=()=>{}){}
   state: PanelState = {recoveryReviewed:false,writeReview:null,writeProgress:null,writeReport:null,recoveryJournal:null,recoveryCandidates:[], uid: null, snapshot: null, progress: {phase:'paused',processed:0,total:0}, filters:emptyFilters(), added:new Set(),removed:new Set(),target:null,targets:[],selectionVersion:'0',confirmation:null,persisted:false,message:'请读取完整收藏，再开始元数据扫描。' };
   private invalidate(): void {
@@ -32,14 +35,14 @@ export class PanelModel {
     this.state.selectionVersion = JSON.stringify({ selection:buildSelectionVersion(this.state.filters,this.preview().ids,this.state.target), edits:++this.revision });
   }
   clearSelection(): void { this.state.filters=emptyFilters(); this.state.added.clear();this.state.removed.clear();this.state.target=null;this.state.targets=[];this.invalidate(); }
-  clearLibrary(): void { this.state.writeProgress=null;this.state.recoveryReviewed=false;this.state.recoveryJournal=null;this.state.recoveryCandidates=[];this.state.writeReport=null;this.state.snapshot=null;this.state.progress={phase:'paused',processed:0,total:0};this.state.persisted=false;this.clearSelection(); }
+  clearLibrary(): void { this.libraryRevision++;this.state.writeProgress=null;this.state.recoveryReviewed=false;this.state.recoveryJournal=null;this.state.recoveryCandidates=[];this.state.writeReport=null;this.state.snapshot=null;this.state.progress={phase:'paused',processed:0,total:0};this.state.persisted=false;this.clearSelection(); }
   setAccount(uid: string | null): void { if(uid!==this.state.uid){this.clearLibrary();this.state.uid=uid;} }
   setLibrary(snapshot: LibrarySnapshot): void {
     validateSnapshot(snapshot);
     const old=this.state.snapshot;
     this.setAccount(snapshot.uid);
     if(old && (old.revision!==snapshot.revision||old.sourcePlaylistId!==snapshot.sourcePlaylistId))this.clearSelection();
-    this.state.snapshot=snapshot;this.invalidate();
+    this.state.snapshot=snapshot;this.libraryRevision++;this.invalidate();
   }
   setProgress(progress:Progress,persisted:boolean):void{this.state.progress={...progress};this.state.persisted=persisted;}
   setFilters(filters:Filters):void{this.state.filters={...filters,genres:[...filters.genres],languages:[...filters.languages],artistIds:[...filters.artistIds]};this.invalidate();}
@@ -67,10 +70,28 @@ export function coverage(songs:SongRecord[]):{artists:number;genres:number;bpm:n
   for(const field of ['artists','genres','bpm','language'] as const) result[field]=songs.length?songs.filter(s=>s[field].status==='known'&&s[field].value!==null).length/songs.length:0;
   return result;
 }
-export type PanelDependencies={readLibrary:(signal:AbortSignal)=>Promise<LibrarySnapshot>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
+export type PanelDependencies={now?:()=>number;readLibrary:(signal:AbortSignal)=>Promise<LibrarySnapshot>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
+export type UiOperation = { id:number; kind:'prepare'|'scan'|'write'|'recovery'; status:'running'|'succeeded'|'paused'|'failed' };
 export class PanelController {
-  readonly model=new PanelModel(()=>{if(this.writing)this.operation?.abort();});
+  readonly progressMeter=new ScanProgressMeter();
+  private now():number{return this.deps.now?.()??performance.now();}
+  get scanMetrics(){return this.progressMeter.snapshot(this.now());}
+  private operationSequence=0;
+  private notification:UiOperation|null=null;
+  get uiOperation():Readonly<UiOperation>|null{return this.notification;}
+  get operationKind():'idle'|UiOperation['kind']{return this.busy?this.notification?.kind??'idle':'idle';}
+  readonly model=new PanelModel(()=>{this.reviewNotice=null;if(this.writing)this.operation?.abort();});
   private writing=false;
+  private preparationIncomplete=false;
+  private failureKind:string|null=null;
+  private accountAttention=false;
+  private reviewNotice:string|null=null;
+  get needsPreparation():boolean{return this.preparationIncomplete;}
+  get storageBlocked():boolean{return this.failureKind==='storage';}
+  get needsAttention():boolean{return this.accountAttention;}
+  get writeNotice():string|null{return this.reviewNotice;}
+  private pausing=false;
+  get isPausing():boolean{return this.pausing;}
   private operation:AbortController|null=null;
   private alive=true;
   private busy=false;
@@ -84,9 +105,10 @@ export class PanelController {
   get isBusy():boolean{return this.busy;}
   get isWriting():boolean{return this.writing;}
   private error(error:unknown):void{
+    this.failureKind=error instanceof ReadError?error.kind:'network';
     if(error instanceof CollectionChangedError){this.model.clearLibrary();this.model.state.message=`收藏已变化：新增 ${error.addedIds.length} 首（${error.addedIds.join('、')||'无'}），移除 ${error.removedIds.length} 首（${error.removedIds.join('、')||'无'}），顺序变化：${error.reordered?'是':'否'}。请重新读取并检查预览。`;}
     else if(error instanceof ReadError&&error.kind==='collectionChanged'){this.model.clearLibrary();this.model.state.message='收藏已变化，旧预览和写入状态已清空。请重新读取完整收藏、扫描并重新检查预览；保存的写入日志仍保留。';}
-    else if(error instanceof ReadError&&['accountChanged','login'].includes(error.kind)){this.model.setAccount(null);this.model.state.message='账号已变化或登录失效，旧选择已清空。请重新读取收藏。';}
+    else if(error instanceof ReadError&&['accountChanged','login'].includes(error.kind)){this.accountAttention=true;this.progressMeter.reset();this.model.setAccount(null);this.model.state.message='账号已变化或登录失效，旧选择已清空。请重新读取收藏。';}
     else {const kind=error instanceof ReadError?error.kind:'network';const messages:Record<string,string>={storage:'存储失败：结果仅在本页可见，暂停跨重启恢复。可重试存储、清理工具缓存或明确仅本页继续。',paused:'已暂停；可以继续扫描。',permission:'无读取权限，已暂停。',rateLimit:'请求受限，已暂停。请稍后手动恢复。',structure:'数据完整性或来源结构检查失败，已暂停。请重新读取。',network:'网络读取失败，已暂停。',business:'业务读取失败，已暂停。'};this.model.state.message=messages[kind]??'读取已暂停。';}
     // Only the typed numeric business code is safe to display; never use raw error messages/options.
     if(error instanceof ReadError&&typeof error.code==='number'&&Number.isFinite(error.code))this.model.state.message+=`（错误码 ${error.code}）`;
@@ -99,12 +121,19 @@ export class PanelController {
     monitor?.abort();
   }
 
-  private async run(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  private async run(work: (signal: AbortSignal) => Promise<void>, kind:UiOperation['kind']='recovery'): Promise<void> {
     if (!this.alive || this.busy || !this.readReady) return;
     // A foreground read/scan owns publication from here onward, even if an old
     // client request ignores cancellation and eventually settles.
     this.invalidateMonitor();
     this.busy = true;
+    this.pausing=false;
+    this.failureKind=null;
+    if(kind==='prepare'){this.progressMeter.start(this.now());this.model.state.progress.phase='reading';this.model.state.message='正在读取并核对完整收藏。';}
+    if(kind==='scan'){if(this.model.state.progress.phase==='complete')this.progressMeter.start(this.now());else this.progressMeter.resume(this.now());}
+    if(kind==='write')this.model.state.message='正在写入并逐批读回核对；已发出的请求可能完成。';
+    this.notification={id:++this.operationSequence,kind,status:'running'};
+    let failed=false;
     const operation = new AbortController();
     this.operation = operation;
     this.deps.setSignal?.(operation.signal);
@@ -112,18 +141,33 @@ export class PanelController {
     try {
       await work(operation.signal);
     } catch (error) {
+      failed=true;
       if (this.alive) this.error(error);
     } finally {
       if (this.operation === operation) {
         this.operation = null;
         this.deps.setSignal?.(undefined);
       }
+      if(kind==='prepare'||kind==='scan')this.progressMeter.pause(this.now());
+      if(!this.model.state.snapshot)this.progressMeter.reset();
       this.busy = false;
+      this.pausing=false;
+      if(operation.signal.aborted&&this.model.state.progress.phase==='pausing')this.model.state.progress.phase='paused';
+      const complete=kind==='write'?this.model.state.writeReport?.status==='complete'&&!this.model.state.writeReport.unconfirmedIds.length:(kind==='prepare'||kind==='scan')&&this.model.state.progress.phase==='complete';
+      this.notification={id:this.operationSequence,kind,status:failed||kind==='write'&&['error','uncertain'].includes(this.model.state.writeReport?.status??'')?'failed':complete?'succeeded':operation.signal.aborted||kind==='prepare'||kind==='scan'||kind==='write'?'paused':'succeeded'};
       this.changed();
     }
   }
-  async readLibrary():Promise<void> {
+  async prepareCollection():Promise<void>{
     await this.run(async signal=>{
+      await this.readCollection(signal);
+      if(!this.alive||signal.aborted||!this.model.state.snapshot)return;
+      await this.scanCollection(signal);
+    },'prepare');
+  }
+  async readLibrary():Promise<void>{await this.run(signal=>this.readCollection(signal),'prepare');}
+  private async readCollection(signal:AbortSignal):Promise<void>{
+      this.preparationIncomplete=true;this.accountAttention=false;this.reviewNotice=null;
       this.model.clearLibrary();
       this.model.state.progress.phase='reading';
       this.model.state.message='正在重新读取完整收藏，请等待来源和顺序核对。';
@@ -135,15 +179,19 @@ export class PanelController {
       this.model.state.message=`完整收藏已读取：${snapshot.ids.length} 首。开始或继续全量元数据扫描。`;
       this.changed();
       const targets=await this.deps.readTargets(snapshot.uid,snapshot.sourcePlaylistId,signal);
-      if(await this.deps.readUid()!==snapshot.uid)throw new ReadError('accountChanged');
+      if(!this.alive||signal.aborted)return;
+      if(await this.deps.readUid(signal)!==snapshot.uid)throw new ReadError('accountChanged');
       if(!this.alive||signal.aborted)return;
       this.model.setTargets(targets);
       this.model.state.recoveryJournal=this.deps.store.load(snapshot.uid)?.writeJournal??null;
-    });
+      this.preparationIncomplete=false;
   }
   async scan(): Promise<void> {
     if (!this.model.state.snapshot) return;
-    await this.run(async signal => {
+    if(this.preparationIncomplete){await this.prepareCollection();return;}
+    await this.run(signal=>this.scanCollection(signal),'scan');
+  }
+  private async scanCollection(signal:AbortSignal):Promise<void>{
       const snapshot = this.model.state.snapshot!;
       const scanner = this.deps.scanner;
       const generation = scanner.generation + 1;
@@ -165,19 +213,20 @@ export class PanelController {
             this.model.setLibrary(publication.result);
           }
           this.model.setProgress(progress, scanner.status.persisted);
+          this.progressMeter.observe(progress,this.now());
           this.changed();
         });
         if (!ownsOperation()) return;
         if (!belongs(result)) throw new ReadError('accountChanged');
         this.model.setLibrary(result);
         this.model.setProgress(scanner.status, scanner.status.persisted);
+        this.progressMeter.observe(scanner.status,this.now());
         this.model.state.message = scanner.status.phase === 'complete'
           ? '全量元数据扫描完成。请筛选、审阅清单后明确确认写入。' : '扫描已暂停，可以继续。';
       } catch (error) {
         if (ownsOperation()) this.model.setProgress(scanner.status, scanner.status.persisted);
         throw error;
       }
-    });
   }
   prepareWrite():void {
     if(this.busy||!this.alive||!this.deps.writer||!this.model.canPrepare())return;
@@ -196,7 +245,7 @@ export class PanelController {
       selectionVersion:s.selectionVersion,songIds:[...ids],target:copyJson(s.target!)};
     try {
       if(old && !same && !rebound && !replanned && (old.creationState==='pending'||old.creationState==='uncertain'||old.batches.some(b=>b.state!=='confirmed'))){
-        s.message='存在待核对写入任务，请先恢复核对；明确选用候选，或审阅不同名称的新计划。';this.changed();return;
+        s.message='存在待核对写入任务，请先恢复核对；明确选用候选，或审阅不同名称的新计划。';this.reviewNotice=s.message;this.changed();return;
       }
       const journal=same||rebound?old!:newJournal(plan);
       // New final confirmation binds the reviewed list; an old confirmation is never restored.
@@ -204,9 +253,9 @@ export class PanelController {
       journal.review={filters:copyJson(s.filters),addedIds:[...s.added],removedIds:[...s.removed]};
       // A cancelled review must retain the prior unknown-create journal.
       if(!replanned)saveJournal(this.deps.store,journal);
-      if(!replanned)s.recoveryJournal=journal;s.confirmation=null;s.writeReview=plan;
-      s.message='请审阅完整清单、人工选择和目标可见性，然后点击最终确认。';
-    }catch(error){this.error(error);}
+      if(!replanned)s.recoveryJournal=journal;s.confirmation=null;s.writeReview=plan;s.writeReport=null;s.writeProgress=null;
+      this.reviewNotice=null;s.message='请审阅完整清单、人工选择和目标可见性，然后点击最终确认。';
+    }catch(error){this.error(error);this.reviewNotice=s.message;}
     this.changed();
   }
   async confirmWrite():Promise<void> {
@@ -240,7 +289,7 @@ export class PanelController {
         const label={complete:'写入读回核对完成',paused:'写入已暂停',uncertain:'写入结果待核对',error:'写入检查失败'}[report.status];
         this.model.state.message=`${label}：新增 ${report.addedIds.length}，已存在 ${report.alreadyPresentIds.length}，待核对 ${report.unconfirmedIds.length}。${report.errors.length?`原因：${report.errors.map(writeReasonText).join('、')}。`:''}恢复时需重新审阅和确认。`;
       }finally{this.writing=false;}
-    });
+    },'write');
   }
   async reviewRecovery():Promise<void> {
     const journal=this.model.state.uid?this.deps.store.load(this.model.state.uid)?.writeJournal:null;
@@ -285,10 +334,10 @@ export class PanelController {
       this.model.state.message='已明确选用候选目标；尚未添加歌曲。请重新审阅完整清单并最终确认。';
     });
   }
-  pause():void{this.operation?.abort();}
+  pause():void{if(this.operation&&!this.pausing){this.pausing=true;this.progressMeter.pause(this.now());if(this.operationKind==='prepare'||this.operationKind==='scan')this.model.state.progress.phase='pausing';this.model.state.message='正在暂停，等待已发出的请求收尾。';this.operation.abort();this.changed();}}
   async forceRefresh():Promise<void>{if(this.busy||!this.model.state.snapshot)return;this.deps.scanner.forceRefresh();this.model.state.confirmation=null;await this.scan();}
   async retryPersistence():Promise<void>{if(this.busy)return;this.deps.scanner.retryPersistence();await this.scan();}
-  continuePageOnly():void{if(this.busy)return;this.deps.scanner.continueWithoutPersistence();this.model.state.persisted=false;this.model.state.message='已明确选择仅本页继续；关闭页面后无法恢复未保存进度。';this.changed();}
+  continuePageOnly():void{if(this.busy||this.preparationIncomplete)return;this.deps.scanner.continueWithoutPersistence();this.model.state.persisted=false;this.model.state.message='已明确选择仅本页继续；关闭页面后无法恢复未保存进度。';this.changed();}
   async clearCache():Promise<void>{if(this.busy||!this.model.state.uid)return;const uid=this.model.state.uid;try{const latest=this.deps.store.load(uid);this.deps.store.save(uid,{schemaVersion:1,uid,scan:null,writeJournal:latest?.writeJournal??null});this.deps.scanner.forceRefresh();this.deps.scanner.retryPersistence();this.model.clearLibrary();this.model.state.message='已清理当前账号的工具扫描缓存；写入任务日志保留。请重新读取。';}catch(e){this.error(e);}this.changed();}
   async checkAccount(): Promise<void> {
     if (!this.alive || !this.model.state.uid || this.checking || this.busy) return;
@@ -304,7 +353,9 @@ export class PanelController {
       const current = await this.deps.readUid(monitor.signal);
       if (!ownsObservation()) return;
       if (current !== uid) {
+        this.accountAttention=true;
         this.model.setAccount(current);
+        this.progressMeter.reset();
         this.model.state.message = '账号已切换，旧预览和选择已清空。请重新读取。';
         this.changed();
       }

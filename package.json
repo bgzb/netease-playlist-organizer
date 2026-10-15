@@ -1,6 +1,6 @@
 {
   "name": "netease-playlist-organizer",
-  "version": "0.1.0-preview.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,7 +17,8 @@
     "verify:offline": "npm run typecheck && npm test && node scripts/verify-offline.mjs",
     "verify:read": "node --experimental-websocket scripts/verify-read.mjs",
     "export:public": "bash scripts/export-public.sh",
-    "benchmark:scan": "node scripts/benchmark-scan.mjs"
+    "benchmark:scan": "node scripts/benchmark-scan.mjs",
+    "preview:panel": "node scripts/preview-panel-ui.mjs"
   },
   "devDependencies": {
     "@types/node": "20.19.0",
