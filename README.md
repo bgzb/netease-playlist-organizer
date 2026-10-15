@@ -7,7 +7,7 @@
 <p align="center">从「我喜欢的音乐」中，整理出你想听的歌单。</p>
 
 <p align="center">
-  <a href="https://github.com/bgzb/netease-playlist-organizer/releases/download/v1.0.0/%E7%BD%91%E6%98%93%E4%BA%91%E6%AD%8C%E5%8D%95%E6%95%B4%E7%90%86%E5%BA%94%E7%94%A8.zip"><strong>下载 Mac 应用</strong></a>
+  <a href="https://github.com/bgzb/netease-playlist-organizer/releases/download/v1.0.0/netease-playlist-organizer-1.0.0-macos-arm64.zip"><strong>下载 Mac 应用</strong></a>
   · <a href="https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.0">发布说明</a>
   · <a href="docs/INSTALL.md">安装帮助</a>
 </p>
@@ -43,7 +43,7 @@
 
 前往 **[v1.0.0 发布页](https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.0)**，在附件中下载 **「网易云歌单整理应用.zip」**，也可以点击上方「下载 Mac 应用」直接下载。
 
-「网易云歌单整理源码.zip」与 GitHub 自动提供的 Source code 面向开发者，普通使用请选择应用 ZIP。发布附件还提供 `SHA256SUMS.txt`，用于校验下载文件。
+应用附件文件名为 `netease-playlist-organizer-1.0.0-macos-arm64.zip`；「网易云歌单整理源码.zip」的文件名为 `netease-playlist-organizer-1.0.0-source.zip`。源码 ZIP 与 GitHub 自动提供的 Source code 面向开发者，普通使用请选择应用 ZIP。发布附件还提供 `SHA256SUMS.txt`，用于校验下载文件。
 
 ### 3. 解压并安装
 
