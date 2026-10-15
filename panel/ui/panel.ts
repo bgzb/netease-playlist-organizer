@@ -6,6 +6,7 @@ import { CollectionChangedError, type Scanner } from '../scan/scan';
 import type { LocalStore } from '../scan/store';
 import type { Writer, RecoveryCandidate } from '../write/writer';
 import { newJournal, saveJournal, copyJson } from '../write/journal';
+import { ScanProgressMeter } from './progress';
 import { ADAPTER_VERSION } from '../client/capabilities';
 import { writeReasonText, type TargetOption } from './target';
 export { readTargets } from './target';
@@ -67,9 +68,12 @@ export function coverage(songs:SongRecord[]):{artists:number;genres:number;bpm:n
   for(const field of ['artists','genres','bpm','language'] as const) result[field]=songs.length?songs.filter(s=>s[field].status==='known'&&s[field].value!==null).length/songs.length:0;
   return result;
 }
-export type PanelDependencies={readLibrary:(signal:AbortSignal)=>Promise<LibrarySnapshot>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
+export type PanelDependencies={now?:()=>number;readLibrary:(signal:AbortSignal)=>Promise<LibrarySnapshot>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
 export type UiOperation = { id:number; kind:'prepare'|'scan'|'write'|'recovery'; status:'running'|'succeeded'|'paused'|'failed' };
 export class PanelController {
+  readonly progressMeter=new ScanProgressMeter();
+  private now():number{return this.deps.now?.()??performance.now();}
+  get scanMetrics(){return this.progressMeter.snapshot(this.now());}
   private operationSequence=0;
   private notification:UiOperation|null=null;
   get uiOperation():Readonly<UiOperation>|null{return this.notification;}
@@ -110,6 +114,8 @@ export class PanelController {
     // client request ignores cancellation and eventually settles.
     this.invalidateMonitor();
     this.busy = true;
+    if(kind==='prepare')this.progressMeter.start(this.now());
+    if(kind==='scan')this.progressMeter.resume(this.now());
     this.notification={id:++this.operationSequence,kind,status:'running'};
     let failed=false;
     const operation = new AbortController();
@@ -126,6 +132,8 @@ export class PanelController {
         this.operation = null;
         this.deps.setSignal?.(undefined);
       }
+      if(kind==='prepare'||kind==='scan')this.progressMeter.pause(this.now());
+      if(!this.model.state.snapshot)this.progressMeter.reset();
       this.busy = false;
       const complete=kind==='write'?this.model.state.writeReport?.status==='complete'&&!this.model.state.writeReport.unconfirmedIds.length:(kind==='prepare'||kind==='scan')&&this.model.state.progress.phase==='complete';
       this.notification={id:this.operationSequence,kind,status:failed?'failed':complete?'succeeded':operation.signal.aborted||kind==='prepare'||kind==='scan'||kind==='write'?'paused':'succeeded'};
@@ -184,12 +192,14 @@ export class PanelController {
             this.model.setLibrary(publication.result);
           }
           this.model.setProgress(progress, scanner.status.persisted);
+          this.progressMeter.observe(progress,this.now());
           this.changed();
         });
         if (!ownsOperation()) return;
         if (!belongs(result)) throw new ReadError('accountChanged');
         this.model.setLibrary(result);
         this.model.setProgress(scanner.status, scanner.status.persisted);
+        this.progressMeter.observe(scanner.status,this.now());
         this.model.state.message = scanner.status.phase === 'complete'
           ? '全量元数据扫描完成。请筛选、审阅清单后明确确认写入。' : '扫描已暂停，可以继续。';
       } catch (error) {
@@ -303,7 +313,7 @@ export class PanelController {
       this.model.state.message='已明确选用候选目标；尚未添加歌曲。请重新审阅完整清单并最终确认。';
     });
   }
-  pause():void{if(this.operation){this.model.state.progress.phase='pausing';this.model.state.message='正在暂停，等待已发出的请求收尾。';this.operation.abort();this.changed();}}
+  pause():void{if(this.operation){this.progressMeter.pause(this.now());this.model.state.progress.phase='pausing';this.model.state.message='正在暂停，等待已发出的请求收尾。';this.operation.abort();this.changed();}}
   async forceRefresh():Promise<void>{if(this.busy||!this.model.state.snapshot)return;this.deps.scanner.forceRefresh();this.model.state.confirmation=null;await this.scan();}
   async retryPersistence():Promise<void>{if(this.busy)return;this.deps.scanner.retryPersistence();await this.scan();}
   continuePageOnly():void{if(this.busy)return;this.deps.scanner.continueWithoutPersistence();this.model.state.persisted=false;this.model.state.message='已明确选择仅本页继续；关闭页面后无法恢复未保存进度。';this.changed();}
@@ -323,6 +333,7 @@ export class PanelController {
       if (!ownsObservation()) return;
       if (current !== uid) {
         this.model.setAccount(current);
+        this.progressMeter.reset();
         this.model.state.message = '账号已切换，旧预览和选择已清空。请重新读取。';
         this.changed();
       }
