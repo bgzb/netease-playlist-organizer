@@ -12,6 +12,7 @@ export class ScanProgressMeter {
  observe(p:Progress,at:number):void{
   const t=this.time(at);this.latest={...p};
   if(p.phase==='complete'){this.pause(t);this.done=true;return;}
+  if(p.phase==='reading')return;
   if(p.phase!=='scanning'){this.pause(t);return;}
   this.resume(t);const active=this.elapsed(t),last=this.samples[this.samples.length-1];
   if(!last||p.processed>last.processed)this.lastAdvance=active;

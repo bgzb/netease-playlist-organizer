@@ -1,13 +1,13 @@
 import type { PanelController } from './panel';
 export type WorkspacePage='prepare'|'filter'|'write'|'result';
 export type ResultGroup='matched'|'unknown'|'unmatched';
-export type WorkspaceState={page:WorkspacePage;collapsed:boolean;resultGroup:ResultGroup;pages:Record<ResultGroup,number>;detailSongId:string|null;filterPanelOpen:boolean;moreMenuOpen:boolean;contextKey:string|null;handledOperationId:number};
-export const createWorkspaceState=():WorkspaceState=>({page:'prepare',collapsed:false,resultGroup:'matched',pages:{matched:0,unknown:0,unmatched:0},detailSongId:null,filterPanelOpen:false,moreMenuOpen:false,contextKey:null,handledOperationId:0});
+export type WorkspaceState={page:WorkspacePage;collapsed:boolean;resultGroup:ResultGroup;pages:Record<ResultGroup,number>;detailSongId:string|null;filterPanelOpen:boolean;moreMenuOpen:boolean;contextKey:string|null;handledOperationId:number;recoveryMode:boolean};
+export const createWorkspaceState=():WorkspaceState=>({page:'prepare',collapsed:false,resultGroup:'matched',pages:{matched:0,unknown:0,unmatched:0},detailSongId:null,filterPanelOpen:false,moreMenuOpen:false,contextKey:null,handledOperationId:0,recoveryMode:false});
 export function canEnterPage(page:WorkspacePage,c:PanelController):boolean{
  const s=c.model.state;
- if(page==='prepare')return !c.isWriting;
+ if(page==='prepare')return !c.isWriting&&!(c.isBusy&&c.operationKind==='write');
  if(page==='result')return !!s.writeReport&&s.writeReport.status==='complete'&&s.writeReport.unconfirmedIds.length===0&&s.writeReport.errors.length===0&&!c.isBusy;
- if(page==='write'&&(c.isWriting||s.recoveryJournal))return !!s.snapshot;
+ if(page==='write'&&(c.isWriting||c.isBusy&&c.operationKind==='write'))return !!s.snapshot;
  if(c.isBusy||!s.snapshot||s.progress.phase!=='complete')return false;
  if(page==='filter')return true;
  const p=c.model.preview();return p.ids.length>0&&!p.error;
@@ -26,6 +26,8 @@ export function reconcileWorkspace(state:WorkspaceState,c:PanelController):Works
    if(op.status==='succeeded'&&(op.kind==='prepare'||op.kind==='scan')&&canEnterPage('filter',c))next.page='filter';
    if(op.status==='succeeded'&&op.kind==='write'&&canEnterPage('result',c))next.page='result';
  }
- if(!canEnterPage(next.page,c))next.page=c.isWriting&&s.snapshot?'write':'prepare';
+ const explicitRecovery=next.page==='write'&&(next.recoveryMode||c.isBusy&&c.operationKind==='recovery')&&!!s.snapshot&&s.recoveryJournal?.plan.uid===s.uid&&(!c.isBusy||c.operationKind==='recovery'||c.operationKind==='write');
+ if(explicitRecovery)next.recoveryMode=true;
+ if(!explicitRecovery&&!canEnterPage(next.page,c))next.page=c.isWriting&&s.snapshot?'write':'prepare';
  return next;
 }
