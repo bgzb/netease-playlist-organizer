@@ -24,6 +24,8 @@ const emptyFilters = (): Filters => ({ genres: [], languages: [], artistIds: [],
 const emptyResult = (): FilterResult => ({ matched: [], unknown: [], unmatched: [], reasons: {} });
 export class PanelModel {
   private revision = 0;
+  private libraryRevision=0;
+  get libraryVersion():number{return this.libraryRevision;}
   constructor(private readonly selectionChanged:()=>void=()=>{}){}
   state: PanelState = {recoveryReviewed:false,writeReview:null,writeProgress:null,writeReport:null,recoveryJournal:null,recoveryCandidates:[], uid: null, snapshot: null, progress: {phase:'paused',processed:0,total:0}, filters:emptyFilters(), added:new Set(),removed:new Set(),target:null,targets:[],selectionVersion:'0',confirmation:null,persisted:false,message:'请读取完整收藏，再开始元数据扫描。' };
   private invalidate(): void {
@@ -33,14 +35,14 @@ export class PanelModel {
     this.state.selectionVersion = JSON.stringify({ selection:buildSelectionVersion(this.state.filters,this.preview().ids,this.state.target), edits:++this.revision });
   }
   clearSelection(): void { this.state.filters=emptyFilters(); this.state.added.clear();this.state.removed.clear();this.state.target=null;this.state.targets=[];this.invalidate(); }
-  clearLibrary(): void { this.state.writeProgress=null;this.state.recoveryReviewed=false;this.state.recoveryJournal=null;this.state.recoveryCandidates=[];this.state.writeReport=null;this.state.snapshot=null;this.state.progress={phase:'paused',processed:0,total:0};this.state.persisted=false;this.clearSelection(); }
+  clearLibrary(): void { this.libraryRevision++;this.state.writeProgress=null;this.state.recoveryReviewed=false;this.state.recoveryJournal=null;this.state.recoveryCandidates=[];this.state.writeReport=null;this.state.snapshot=null;this.state.progress={phase:'paused',processed:0,total:0};this.state.persisted=false;this.clearSelection(); }
   setAccount(uid: string | null): void { if(uid!==this.state.uid){this.clearLibrary();this.state.uid=uid;} }
   setLibrary(snapshot: LibrarySnapshot): void {
     validateSnapshot(snapshot);
     const old=this.state.snapshot;
     this.setAccount(snapshot.uid);
     if(old && (old.revision!==snapshot.revision||old.sourcePlaylistId!==snapshot.sourcePlaylistId))this.clearSelection();
-    this.state.snapshot=snapshot;this.invalidate();
+    this.state.snapshot=snapshot;this.libraryRevision++;this.invalidate();
   }
   setProgress(progress:Progress,persisted:boolean):void{this.state.progress={...progress};this.state.persisted=persisted;}
   setFilters(filters:Filters):void{this.state.filters={...filters,genres:[...filters.genres],languages:[...filters.languages],artistIds:[...filters.artistIds]};this.invalidate();}

@@ -1,21 +1,22 @@
 import {coverage,type PanelController} from './panel';
 import {canEnterPage,type WorkspaceState,type WorkspacePage} from './workspace-state';
 import {textElement,renderPreview} from './preview';
-import {renderFilters} from './filters';
+import {renderFilters,FilterCandidateCache} from './filters';
+import {createPlaylistNavigator,validPlaylistId} from './navigation';
 import {renderTarget,renderWriteControls} from './target';
 export function actionButton(doc:Document,label:string,key:string,action:()=>unknown,disabled=false):HTMLButtonElement{
  const b=textElement(doc,'button',label);b.dataset.action=key;b.dataset.key=key;b.disabled=disabled;b.onclick=()=>{if(!b.disabled)void action();};return b;
 }
 const phaseText:Record<string,string>={reading:'正在读取收藏',scanning:'正在扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'准备完成',error:'准备遇到问题'};
 export const duration=(ms:number)=>ms<60000?`${Math.floor(ms/1000)} 秒`:`${Math.floor(ms/60000)} 分 ${Math.floor(ms/1000)%60} 秒`;
-export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController):{update(state:WorkspaceState):void;dispose():void}{
+export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController,options:{openPlaylist?:(id:string)=>boolean}={}):{update(state:WorkspaceState):void;dispose():void}{
  let prepareView:{update():void}|null=null;let prepareOperationId=0;let renderedContext:string|null=null;
- let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;let targetMode:'new'|'existing'|null=null;let reviewPage=0;let reviewTask:string|null=null;let viewContext:string|null=null;const searches:Record<string,string>={};
+ let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;let targetMode:'new'|'existing'|null=null;let reviewPage=0;let reviewTask:string|null=null;let viewContext:string|null=null;const searches:Record<string,string>={};const candidatePages:Record<string,number>={};const candidateCache=new FilterCandidateCache();
  const nav=textElement(doc,'nav','');nav.className='stages';nav.setAttribute('aria-label','整理阶段');
  const body=textElement(doc,'main','');body.className='workspace-body';
  const footer=textElement(doc,'footer','');footer.className='workspace-footer';
  root.append(nav,body,footer);
- const changed=()=>controller.changed();
+ const changed=()=>controller.changed();const navigatePlaylist=options.openPlaylist??createPlaylistNavigator(doc);
  const findKey=(key:string):HTMLElement|null=>{const visit=(node:Element):HTMLElement|null=>{if((node as HTMLElement).dataset?.key===key)return node as HTMLElement;for(const child of Array.from(node.children)){const match=visit(child);if(match)return match;}return null;};return visit(root);};
  const focusHeading=()=>{const title=body.querySelector('h2');if(title){title.tabIndex=-1;title.focus();}};
  function go(page:WorkspacePage){if(!canEnterPage(page,controller))return;if(page==='filter'){controller.model.state.writeReview=null;controller.model.state.confirmation=null;}state.page=page;state.recoveryMode=false;state.detailSongId=null;state.filterPanelOpen=false;changed();}
@@ -80,7 +81,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   if(state.page==='filter'){
    const toggle=actionButton(doc,'筛选条件','toggle-filters',()=>{state.filterPanelOpen=!state.filterPanelOpen;changed();});toggle.className='filter-toggle';toggle.setAttribute('aria-expanded',String(state.filterPanelOpen));body.append(toggle);
    const layout=textElement(doc,'div','');layout.className='filter-layout';layout.dataset.filters=String(state.filterPanelOpen);
-   const filterContent=renderFilters(doc,controller.model,searches,()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();});const sidebar=textElement(doc,'section','');sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close,filterContent);
+   const filterContent=renderFilters(doc,controller.model,{searches,pages:candidatePages,cache:candidateCache,changed:()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();}});const sidebar=textElement(doc,'section','');sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close,filterContent);
    previewView=renderPreview(doc,controller.model,{state,changed});layout.append(sidebar,previewView.element);body.append(layout);
    const summary=textElement(doc,'div','');summary.className='selection-summary';summary.dataset.action='selection-summary';footer.append(summary);if(s.recoveryJournal)footer.append(actionButton(doc,'恢复写入','open-recovery',recovery));const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
   }
@@ -97,14 +98,22 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   }
   if(state.page==='result'){
    const r=s.writeReport!;const box=textElement(doc,'section','');box.className='result-page';box.append(textElement(doc,'span','✓'),textElement(doc,'h2','整理完成，已读回核对。'),textElement(doc,'p',`目标歌单 ${s.targets.find(t=>t.id===r.targetId)?.name??(s.recoveryJournal?.plan.target.kind==='new'?s.recoveryJournal.plan.target.name:r.targetId)}`),textElement(doc,'strong',`实际新增 ${r.addedIds.length} 首`),textElement(doc,'p',`已存在 ${r.alreadyPresentIds.length} 首 · 清单总数 ${r.addedIds.length+r.alreadyPresentIds.length} 首`));body.append(box);
+   const resultContext=state.contextKey,feedback=textElement(doc,'p','');feedback.className='notice';feedback.setAttribute('role','status');feedback.hidden=true;box.append(feedback);
+   const open=actionButton(doc,'打开目标歌单','open-target',()=>{
+    const latest=controller.model.state.writeReport;
+    if(!canEnterPage('result',controller)||state.contextKey!==resultContext||!latest||latest.taskId!==r.taskId||latest.targetId!==r.targetId||!validPlaylistId(latest.targetId))return;
+    let opened=false;try{opened=navigatePlaylist(latest.targetId);}catch{/* Host navigation is optional; never display raw errors. */}
+    if(opened){state.collapsed=true;state.moreMenuOpen=false;changed();}
+    else {feedback.hidden=false;feedback.textContent='当前客户端暂时无法打开，请在网易云中按目标名称查找该歌单。';}
+   },!validPlaylistId(r.targetId));footer.append(open);
    footer.append(actionButton(doc,'返回筛选','back-filter',()=>go('filter')));const finish=actionButton(doc,'结束整理','finish',()=>{const targets=s.targets;controller.model.clearSelection();s.targets=targets;s.message='本次整理已结束，准备数据与写入日志已保留。';Object.assign(s,{writeReview:null,confirmation:null,writeProgress:null,writeReport:null});state.page='filter';state.collapsed=false;state.resultGroup='matched';state.filterPanelOpen=false;state.moreMenuOpen=false;state.recoveryMode=false;state.detailSongId=null;state.pages={matched:0,unknown:0,unmatched:0};changed();});finish.className='primary';footer.append(finish);
   }
  }
  function updateMetrics(){const metrics=body.querySelector('[data-action="scan-metrics"]');if(!metrics)return;const m=controller.scanMetrics;metrics.textContent=`本次用时 ${duration(m.elapsedMs)}  ·  ${m.ratePerMinute===null?'速度正在估算':`${Math.round(m.ratePerMinute)} 首/分钟`}  ·  ${m.remainingMs===null?'剩余时间暂不可估算':m.remainingMs===0?'准备完成':`预计剩余约 ${duration(m.remainingMs)}`}`;}
  function update(next:WorkspaceState){
-  if(disposed)return;state=next;const contextChanged=viewContext!==state.contextKey;if(contextChanged){viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
+  if(disposed)return;state=next;const contextChanged=viewContext!==state.contextKey;if(contextChanged){candidateCache.clear();for(const key of Object.keys(candidatePages))delete candidatePages[key];for(const key of Object.keys(searches))delete searches[key];viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
   const filters=JSON.stringify(s.filters);if(lastFilters&&filters!==lastFilters){state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;}lastFilters=filters;
-  const filterKey=JSON.stringify([state.contextKey,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
+  const filterKey=JSON.stringify([state.contextKey,controller.model.libraryVersion,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
   const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.writeNotice,controller.isBusy]);
   const filterStable=state.page==='filter'&&body.dataset.page==='filter'&&filterIdentity===filterKey&&previewView;
   const prepareStable=state.page==='prepare'&&body.dataset.page==='prepare'&&prepareView&&(renderedContext===state.contextKey||controller.uiOperation?.id===prepareOperationId&&controller.uiOperation?.kind==='prepare'&&controller.uiOperation?.status==='running'&&!controller.needsAttention);
@@ -117,5 +126,5 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   }
   updateMetrics();
  }
- return {update,dispose(){disposed=true;nav.remove();body.remove();footer.remove();}};
+ return {update,dispose(){disposed=true;candidateCache.clear();nav.remove();body.remove();footer.remove();}};
 }

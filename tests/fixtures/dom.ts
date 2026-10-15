@@ -2,7 +2,7 @@
 export class TestElement {
  children:TestElement[]=[];parent:TestElement|null=null;hidden=false;dataset:Record<string,string>={};attributes:Record<string,string>={};
  style={values:new Map<string,string>(),setProperty(k:string,v:string){this.values.set(k,v);},getPropertyValue(k:string){return this.values.get(k)??'';}};value='';checked=false;disabled=false;className='';shadowRoot:TestElement|null=null;text='';scrollTop=0;tabIndex=0;type='';selectionStart=0;activeElement:TestElement|null=null;
- onclick:((e?:any)=>unknown)|null=null;oninput:(()=>void)|null=null;onchange:(()=>void)|null=null;onkeydown:((e:any)=>void)|null=null;
+ open=false;ontoggle:(()=>void)|null=null;onclick:((e?:any)=>unknown)|null=null;oninput:(()=>void)|null=null;onchange:(()=>void)|null=null;onkeydown:((e:any)=>void)|null=null;
  constructor(public tagName:string,public ownerDocument?:any){}
  get parentElement(){return this.parent;}get id(){return this.attributes.id??'';}set id(v:string){this.attributes.id=v;}
  set textContent(value:string){this.text=value;this.children=[];}get textContent():string{return this.text+this.children.map(c=>c.textContent).join('');}

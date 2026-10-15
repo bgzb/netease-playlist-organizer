@@ -9,6 +9,7 @@ import { PanelController, type OrganizerStatus, type PanelDependencies } from '.
 import {createWorkspaceState,reconcileWorkspace,canEnterPage,type WorkspaceState} from './workspace-state';
 import {createWorkspaceView,actionButton} from './workspace';
 import {resolveAmbientTheme,applyAmbientTheme} from './theme';
+import {createPlaylistNavigator} from './navigation';
 import { textElement } from './preview';
 import { createWriter } from '../write/writer';
 import { readTargets } from './target';
@@ -65,7 +66,7 @@ function createController():PanelController{
   const deps:PanelDependencies={readLibrary:async signal=>{operationSignal=signal;return library.readLibrary();},readUid:signal=>createLibraryReader((path,data)=>read(path,data,signal)).readUid(),readTargets:(uid,sourceId,signal)=>readTargets(read,uid,sourceId,signal),scanner,store,...(report.write?{writer:createWriter({read,write:report.write,store})}:{}),setSignal:signal=>{operationSignal=signal;}};
   return new PanelController(deps);
 }
-export function mountOrganizer(options:{document?:Document;scope?:Scope;controller?:PanelController}={}):OrganizerInstance{
+export function mountOrganizer(options:{document?:Document;scope?:Scope;controller?:PanelController;openPlaylist?:(id:string)=>boolean}={}):OrganizerInstance{
   const doc=options.document??document,scope=options.scope??window;
   const existing=scope.__ncmOrganizerV1;if(existing?.status().installed){existing.show();return existing;}
   const controller=options.controller??createController();let state=createWorkspaceState();let removed=false;let renderTimer:ReturnType<typeof setTimeout>|undefined;let toastTimer:ReturnType<typeof setTimeout>|undefined;let announced=0;
@@ -81,7 +82,7 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const menu=textElement(doc,'div','');menu.className='more-menu';menu.hidden=true;
   const more=actionButton(doc,'更多 ···','more',()=>{state.moreMenuOpen=!state.moreMenuOpen;menu.hidden=!state.moreMenuOpen;more.setAttribute('aria-expanded',String(state.moreMenuOpen));});more.setAttribute('aria-expanded','false');
   const collapse=()=>{state.collapsed=true;render();};
-  controls.append(more,actionButton(doc,'收起 ↗','collapse',collapse));header.append(brand,controls);panel.append(header);const view=createWorkspaceView(doc,panel,controller);
+  controls.append(more,actionButton(doc,'收起 ↗','collapse',collapse));header.append(brand,controls);panel.append(header);const view=createWorkspaceView(doc,panel,controller,{openPlaylist:options.openPlaylist??createPlaylistNavigator(doc)});
   const confirmMaintenance=(text:string,fn:()=>unknown)=>{if(doc.defaultView?.confirm?.(text))void fn();};
   menu.append(actionButton(doc,'重新读取收藏','reread',()=>controller.prepareCollection()),actionButton(doc,'强制更新元数据','refresh',()=>controller.forceRefresh()),actionButton(doc,'清理扫描缓存','clear-cache',()=>confirmMaintenance('清理本账号扫描缓存？写入日志会保留。',()=>controller.clearCache())),actionButton(doc,'移除工具','remove',()=>confirmMaintenance('移除整理工具？正在发出的请求仍可能完成。',()=>instance.remove())));panel.append(menu);
   const toast=textElement(doc,'div','');toast.className='toast';toast.hidden=true;toast.setAttribute('role','status');shadow.append(entry,panel,toast);(doc.body??doc.documentElement).append(host);

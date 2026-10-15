@@ -14,7 +14,7 @@ class Element {
   querySelector(){return null;}focus(){}getBoundingClientRect(){return {bottom:55};}
 }
 const body=new Element('body');const listeners=new Map();
-const document={body,documentElement:body,createElement:tag=>new Element(tag),createTextNode:text=>{const e=new Element('#text');e.textContent=text;return e;},querySelector:()=>null,addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:k=>listeners.delete(k)};
+const document={body,documentElement:body,createElement:tag=>new Element(tag),createTextNode:text=>{const e=new Element('#text');e.textContent=text;return e;},location:{href:'orpheus://orpheus/app.html'},querySelector:()=>null,addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:k=>listeners.delete(k)};
 const storage=new Map();const localStorage={get length(){return storage.size;},key:i=>[...storage.keys()][i]??null,getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
 const calls=[],writes=[],targetTracks=new Set(),playlists=[{id:8,name:'喜欢',specialType:5,creator:{userId:7},privacy:10},{id:9,name:'合成已有目标',specialType:0,creator:{userId:7},privacy:0,subscribed:false}];const ids=[1,2,3];const detail=id=>({id,name:id===1?'<img onerror=alert(1)>':'合成曲目',ar:[{id:id===2?0:11,name:'<svg onload=alert(2)>'}]});
 const apiFactory=path=>async data=>{
@@ -29,8 +29,9 @@ const apiFactory=path=>async data=>{
   }
 };
 const wiki=async id=>{const wikiSubElementVos=[];return {metas:[{title:'曲风',content:'摇滚-日系摇滚'},{title:'BPM',content:'100'}]};};
-const factories=[];factories[3]=function(){const formatOption='',cacheStrategy='',fetchFrontEndEncryptError='';};factories[5]=function(){const endpoint='/api/music/wiki/home/song/desktop/get';};factories[7]=function(){const wikiSubElementVos=[];};
-const req=Object.assign(id=>{throw Error('unexpected uncached '+id);},{m:factories,c:{3:{exports:{request:apiFactory}},7:{exports:{wiki}}}});
+const openedPaths=[],navigationHistory={location:{pathname:'/'},push(path){this.location={pathname:path};openedPaths.push(path);}};const factories=[];factories[3]=function(){const formatOption='',cacheStrategy='',fetchFrontEndEncryptError='';};factories[5]=function(){const endpoint='/api/music/wiki/home/song/desktop/get';};factories[7]=function(){const wikiSubElementVos=[];};
+factories[12]=function(){const marker='dva-tool getHistory getDispatch';return marker;};
+const req=Object.assign(id=>{throw Error('unexpected uncached '+id);},{m:factories,c:{3:{exports:{request:apiFactory}},7:{exports:{wiki}},12:{exports:{a:{inited:true,history:navigationHistory}}}}});
 const intervals=new Set();let intervalID=0;
 const context=vm.createContext({document,localStorage,webpackJsonp:{push(entry){for(const factory of Object.values(entry[1]))factory({}, {}, req);}},AbortController,performance,setTimeout,clearTimeout,setInterval(){const id=++intervalID;intervals.add(id);return id;},clearInterval:id=>intervals.delete(id)});context.window=context;
 const bundle=fs.readFileSync(process.argv[2]??'work/dist/panel.js','utf8');
@@ -49,6 +50,7 @@ action('write-confirm').onclick();await new Promise(r=>setTimeout(r,180));
 assert.equal(writes.length,2);assert.equal(writes[0].path,'/api/playlist/create');assert.equal(writes[0].data.privacy,10);assert.equal(writes[0].data.type,'NORMAL');assert.equal(writes[1].data.op,'add');assert.equal(targetTracks.size,3);
 action('back-filter').onclick();action('to-write').onclick();button('恢复核对（只读）').onclick();await new Promise(r=>setTimeout(r,180));assert.equal(writes.length,2);
 button('审阅写入清单').onclick();await new Promise(r=>setTimeout(r,130));action('write-confirm').onclick();await new Promise(r=>setTimeout(r,180));assert.equal(writes.length,2);
+assert.deepEqual(openedPaths,[]);action('open-target').onclick();assert.deepEqual(openedPaths,['/playlist/10']);assert.equal(walk(body.children[0].shadowRoot).find(e=>e.dataset.action==='workspace').hidden,true);instance.show();assert.equal(writes.length,2);
 action('finish').onclick();const finished=walk(body.children[0].shadowRoot);assert.equal(finished.find(e=>e.dataset.action==='workspace').hidden,false);assert.ok(finished.some(e=>e.dataset.page==='filter'));assert.equal(writes.length,2);
 assert.equal(instance.status().writeVerification,'unverified');assert.equal(JSON.stringify(instance.status()).includes('uid'),false);
 instance.remove();assert.equal(body.children.length,0);assert.equal(intervals.size,0);assert.equal(listeners.size,0);assert.equal(context.__ncmOrganizerV1,undefined);run();assert.notEqual(context.__ncmOrganizerV1,instance);context.__ncmOrganizerV1.remove();
