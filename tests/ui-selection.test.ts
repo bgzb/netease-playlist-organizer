@@ -6,6 +6,7 @@ import { makeSong } from './fixtures/synthetic';
 import { LocalStore } from '../panel/scan/store';
 import { createScanner, CollectionChangedError } from '../panel/scan/scan';
 import { ReadError } from '../panel/client/requests';
+import {testDocument,TestElement,walk} from './fixtures/dom';
 const api = ui as any;
 function model() { assert.equal(typeof api.PanelModel, 'function', 'selection state is not implemented'); return new api.PanelModel(); }
 function loaded() { const m=model(); const s=snapshot(3); s.songs=[makeSong('1',{genres:['摇滚-日系摇滚']}),makeSong('2',{genres:null}),makeSong('3',{genres:['流行']})].map((s,position)=>({...s,position})); m.setLibrary(s); m.setFilters({...m.state.filters,genres:['摇滚-日系摇滚']}); m.setProgress({phase:'complete',processed:3,total:3},true); return m; }
@@ -25,28 +26,15 @@ test('collection change clears selection, reports differences and requires rerea
 test('remove aborts request signal and late read cannot publish',async()=>{let done!:(s:any)=>void;let signal:AbortSignal|undefined;const store=new LocalStore(memoryStorage());const scanner=createScanner({readLibrary:async()=>snapshot(),readUid:async()=>'7',readMetadata:async()=>{const {genres,bpm,language}=makeSong('1');return {genres,bpm,language};},store});const c=new api.PanelController({readLibrary:async(s:AbortSignal)=>{signal=s;return new Promise(r=>done=r);},readUid:async()=>'7',readTargets:async()=>[],scanner,store});const pending=c.readLibrary();c.remove();assert.equal(signal?.aborted,true);done(snapshot());await pending;assert.equal(c.model.state.snapshot,null);assert.equal(c.status().installed,false);});
 
 
-test('mounted panel uses literal malicious song/artist text, reuses instance and removes its own DOM',async()=>{
+test('mounted panel uses literal malicious song/artist text, reuses instance and removes its own DOM',async(t)=>{
   const entry=await import('../panel/ui/entry') as any;
   assert.equal(typeof entry.mountOrganizer,'function','mount lifecycle is not implemented');
-  class Element {
-    children:any[]=[];parent:any=null;hidden=false;dataset:any={};style:any={};attributes:any={};value='';checked=false;disabled=false;className='';onclick:any;onchange:any;oninput:any;shadowRoot:any=null;private text='';
-    constructor(public tagName:string){}
-    set textContent(value:string){this.text=value;this.children=[];}get textContent(){return this.text+this.children.map(c=>c.textContent??'').join('');}
-    set innerHTML(_v:string){throw Error('HTML sink');}
-    append(...nodes:any[]){for(const node of nodes){this.children.push(node);node.parent=this;}}
-    replaceChildren(...nodes:any[]){for(const node of this.children)node.parent=null;this.children=[];this.append(...nodes);}
-    remove(){if(this.parent)this.parent.children=this.parent.children.filter((x:any)=>x!==this);this.parent=null;}
-    setAttribute(key:string,value:string){this.attributes[key]=value;}
-    attachShadow(){this.shadowRoot=new Element('shadow');return this.shadowRoot;}
-    querySelector(){return null;}focus(){}getBoundingClientRect(){return {bottom:55};}
-  }
-  const listeners=new Map<string,Function>();const body=new Element('body');const foreign=new Element('foreign');body.append(foreign);
-  const doc:any={body,documentElement:body,createElement:(tag:string)=>new Element(tag),createTextNode:(text:string)=>{const e=new Element('#text');e.textContent=text;return e;},querySelector:()=>null,addEventListener:(event:string,fn:Function)=>listeners.set(event,fn),removeEventListener:(event:string)=>listeners.delete(event)};
+  const {doc,listeners}=testDocument();const body=doc.body;const foreign=new TestElement('foreign');body.append(foreign);
   const m=loaded();m.state.snapshot.songs[0].name='<img onerror=alert(1)>';m.state.snapshot.songs[0].artists.value[0].name='<svg onload=alert(2)>';
   const store=new LocalStore(memoryStorage());const scanner=createScanner({readLibrary:async()=>snapshot(),readUid:async()=>'7',readMetadata:async()=>({genres:makeSong('1').genres,bpm:makeSong('1').bpm,language:makeSong('1').language}),store});
   const controller=new api.PanelController({readLibrary:async()=>snapshot(),readUid:async()=>'7',readTargets:async()=>[],scanner,store});controller.model.state=m.state;
   const scope:any={};const first=entry.mountOrganizer({document:doc,scope,controller});const again=entry.mountOrganizer({document:doc,scope,controller});assert.equal(first,again);assert.equal(body.children.length,2);
-  const host=body.children[1];const all=(node:any):any[]=>[node,...node.children.flatMap(all)];assert.equal(all(host.shadowRoot).some(n=>['img','svg'].includes(n.tagName)),false);assert.match(host.shadowRoot.textContent,/<img onerror=alert\(1\)>/);assert.match(host.shadowRoot.textContent,/<svg onload=alert\(2\)>/);
+  t.after(()=>first.remove());const host=body.children[1];walk(host.shadowRoot).find(e=>e.dataset.action==='nav-filter')!.onclick!();await new Promise(r=>setTimeout(r,280));const all=(node:any):any[]=>[node,...node.children.flatMap(all)];assert.equal(all(host.shadowRoot).some(n=>['img','svg'].includes(n.tagName)),false);assert.match(host.shadowRoot.textContent,/<img onerror=alert\(1\)>/);assert.match(host.shadowRoot.textContent,/<svg onload=alert\(2\)>/);
   assert.equal(first.status().readReady,true);assert.equal(first.status().writeVerification,'unverified');first.remove();assert.deepEqual(body.children,[foreign]);assert.equal(scope.__ncmOrganizerV1,undefined);assert.equal(listeners.size,0);
   const replacement=entry.mountOrganizer({document:doc,scope,controller:new api.PanelController({readLibrary:async()=>snapshot(),readUid:async()=>'7',readTargets:async()=>[],scanner,store})});assert.notEqual(replacement,first);replacement.remove();
 });

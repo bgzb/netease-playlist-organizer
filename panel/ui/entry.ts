@@ -5,11 +5,13 @@ import { createMetadataReader } from '../client/metadata';
 import { checkPause, ReadError } from '../client/requests';
 import { createScanner } from '../scan/scan';
 import { LocalStore, type StorageLike } from '../scan/store';
-import { PanelController, coverage, type OrganizerStatus, type PanelDependencies } from './panel';
-import { renderFilters } from './filters';
-import { renderPreview, textElement } from './preview';
+import { PanelController, type OrganizerStatus, type PanelDependencies } from './panel';
+import {createWorkspaceState,reconcileWorkspace} from './workspace-state';
+import {createWorkspaceView,actionButton} from './workspace';
+import {resolveAmbientTheme,applyAmbientTheme} from './theme';
+import { textElement } from './preview';
 import { createWriter } from '../write/writer';
-import { readTargets, renderTarget, renderWriteControls } from './target';
+import { readTargets } from './target';
 export type OrganizerInstance={show():void;remove():void;status():OrganizerStatus};
 type Scope={__ncmOrganizerV1?:OrganizerInstance};
 declare global { interface Window { __ncmOrganizerV1?:OrganizerInstance; } }
@@ -32,54 +34,40 @@ function createController():PanelController{
   return new PanelController(deps);
 }
 export function mountOrganizer(options:{document?:Document;scope?:Scope;controller?:PanelController}={}):OrganizerInstance{
-  const doc=options.document??document;const scope=options.scope??window;
+  const doc=options.document??document,scope=options.scope??window;
   const existing=scope.__ncmOrganizerV1;if(existing?.status().installed){existing.show();return existing;}
-  const controller=options.controller??createController();
-  const host=doc.createElement('div');host.id='ncm-organizer-v1-root';
+  const controller=options.controller??createController();let state=createWorkspaceState();let removed=false;let renderTimer:ReturnType<typeof setTimeout>|undefined;let toastTimer:ReturnType<typeof setTimeout>|undefined;let announced=0;
+  const host=doc.createElement('div');host.id='ncm-organizer-v1-root';applyAmbientTheme(host,resolveAmbientTheme(doc));
+  // Safe fallback keeps native navigation and playback reachable; only owned rectangles intercept clicks.
   const topbar=doc.querySelector('header, [class*="topbar"], [class*="TopBar"]');
-  if(topbar){const bottom=topbar.getBoundingClientRect().bottom;if(bottom>0&&bottom<160){host.style.top=`${bottom+8}px`;host.style.setProperty('--entry-top',`${bottom+8}px`);}}
+  const bottom=topbar?.getBoundingClientRect().bottom;if(bottom&&bottom>0&&bottom<160)host.style.setProperty('--safe-top',`${bottom+8}px`);
   const shadow=host.attachShadow({mode:'open'});shadow.append(textElement(doc,'style',styles));
-  const entry=textElement(doc,'button','歌单整理');entry.className='entry';entry.setAttribute('aria-expanded','true');
-  const panel=textElement(doc,'div','');panel.className='panel';panel.setAttribute('role','dialog');panel.setAttribute('aria-label','歌单整理筛选与写入');
-  shadow.append(entry,panel);(doc.body??doc.documentElement).append(host);
-  const searches:Record<string,string>={};const pages:Record<string,number>={};let renderTimer:ReturnType<typeof setTimeout>|undefined;let removed=false;
-  function render():void{
-    if(removed)return;
-    const focused=shadow.activeElement as HTMLInputElement|null;const focusKey=focused?.dataset.key;
-    const caret=focused&&['text','search'].includes(focused.type)?focused.selectionStart:null;
-    const oldScroll=panel.scrollTop;
-    panel.replaceChildren();
-    const header=textElement(doc,'header','');header.append(textElement(doc,'h1','歌单整理'));
-    const close=textElement(doc,'button','收起');close.onclick=()=>{panel.hidden=true;entry.setAttribute('aria-expanded','false');};
-    const remove=textElement(doc,'button','移除工具');remove.onclick=()=>instance.remove();header.append(close,remove);panel.append(header,textElement(doc,'p','完整收藏 · 四维筛选 · 单目标预览'));
-    const state=controller.model.state;const status=textElement(doc,'section','');status.className='status';status.setAttribute('aria-live','polite');
-    const phases:Record<string,string>={reading:'读取完整收藏',scanning:'扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'扫描完成',error:'读取失败'};
-    status.append(textElement(doc,'strong',`${phases[state.progress.phase]} · ${state.progress.processed}/${state.progress.total}`),textElement(doc,'p',state.message));
-    const bar=doc.createElement('progress');bar.max=Math.max(1,state.progress.total);bar.value=state.progress.processed;status.append(bar);
-    const rates=coverage(state.snapshot?.songs??[]);const ratesBox=textElement(doc,'div','');ratesBox.className='coverage';
-    for(const [field,label] of [['artists','歌手'],['genres','曲风'],['bpm','BPM'],['language','语种']] as const){ratesBox.append(textElement(doc,'span',`${label}覆盖率 ${(rates[field]*100).toFixed(1)}%`));}
-    status.append(ratesBox,textElement(doc,'p',state.persisted?'当前扫描检查点已保存；恢复仍会重新校验账号和收藏。':'persisted=false · 当前进度未保存，不能保证跨重启恢复。'));
-    const suspended=(['genres','bpm','language'] as const).filter(field=>state.snapshot?.songs.some(song=>song[field].status==='error'&&song[field].reason?.includes('维度已暂停')));
-    if(suspended.length){const names={genres:'曲风',bpm:'BPM',language:'语种'};const notice=textElement(doc,'p',`来源结构失配，已暂停维度：${suspended.map(f=>names[f]).join('、')}。可强制更新重新检测。`);notice.className='notice';status.append(notice);}panel.append(status);
-    const actions=textElement(doc,'div','');actions.className='actions';
-    const ready=controller.status().readReady,busy=controller.isBusy;
-    const buttons:[string,()=>unknown,boolean][]=[['重新读取完整收藏',()=>controller.readLibrary(),busy||!ready],['开始 / 继续扫描',()=>controller.scan(),busy||!state.snapshot||!ready],['暂停',()=>controller.pause(),!busy],['强制更新 / 重置维度',()=>controller.forceRefresh(),busy||!state.snapshot||!ready],['重试存储并恢复',()=>controller.retryPersistence(),busy||!state.snapshot||state.persisted||!ready],['仅本页继续',()=>{controller.continuePageOnly();void controller.scan();},busy||!state.snapshot||state.persisted||state.progress.phase!=='paused'||!ready],['清理工具扫描缓存',()=>controller.clearCache(),busy||!state.uid]];
-    for(const [label,action,disabled] of buttons){const button=textElement(doc,'button',label);button.disabled=disabled;button.onclick=()=>{void action();};actions.append(button);}panel.append(actions);
-    const changed=()=>{controller.changed();render();};
-    const editing=textElement(doc,'fieldset','');editing.disabled=controller.isWriting;
-    editing.append(renderFilters(doc,controller.model,searches,changed),renderTarget(doc,controller.model,changed),renderPreview(doc,controller.model,pages,changed));
-    panel.append(editing,renderWriteControls(doc,controller));
-    panel.scrollTop=oldScroll;
-    if(focusKey){const input=shadow.querySelector(`[data-key="${focusKey}"]`) as HTMLInputElement|null;input?.focus();if(caret!==null&&input&&['text','search'].includes(input.type))input.setSelectionRange(caret,caret);}
+  const entry=actionButton(doc,'歌单整理','entry',()=>instance.show());entry.className='entry';entry.setAttribute('aria-expanded','true');
+  const panel=textElement(doc,'section','');panel.className='panel';panel.dataset.action='workspace';panel.setAttribute('role','region');panel.setAttribute('aria-label','歌单整理工作区');
+  const header=textElement(doc,'header','');header.className='workspace-header';const brand=textElement(doc,'div','');brand.append(textElement(doc,'small','PLAYLIST ORGANIZER'),textElement(doc,'h1','歌单整理'));
+  const controls=textElement(doc,'div','');controls.className='header-actions';
+  const menu=textElement(doc,'div','');menu.className='more-menu';menu.hidden=true;
+  const more=actionButton(doc,'更多 ···','more',()=>{state.moreMenuOpen=!state.moreMenuOpen;menu.hidden=!state.moreMenuOpen;more.setAttribute('aria-expanded',String(state.moreMenuOpen));});more.setAttribute('aria-expanded','false');
+  const collapse=()=>{state.collapsed=true;render();};
+  controls.append(more,actionButton(doc,'收起 ↗','collapse',collapse));header.append(brand,controls);panel.append(header);const view=createWorkspaceView(doc,panel,controller);
+  const confirmMaintenance=(text:string,fn:()=>unknown)=>{if(doc.defaultView?.confirm?.(text))void fn();};
+  menu.append(actionButton(doc,'重新读取收藏','reread',()=>controller.prepareCollection()),actionButton(doc,'强制更新元数据','refresh',()=>controller.forceRefresh()),actionButton(doc,'清理扫描缓存','clear-cache',()=>confirmMaintenance('清理本账号扫描缓存？写入日志会保留。',()=>controller.clearCache())),actionButton(doc,'移除工具','remove',()=>confirmMaintenance('移除整理工具？正在发出的请求仍可能完成。',()=>instance.remove())));panel.append(menu);
+  const toast=textElement(doc,'div','');toast.className='toast';toast.hidden=true;toast.setAttribute('role','status');shadow.append(entry,panel,toast);(doc.body??doc.documentElement).append(host);
+  function render(){if(removed)return;state=reconcileWorkspace(state,controller);panel.hidden=state.collapsed;menu.hidden=!state.moreMenuOpen||state.collapsed;entry.setAttribute('aria-expanded',String(!state.collapsed));const s=controller.model.state,op=controller.uiOperation;
+    const issue=op&&(op.status==='failed'||op.status==='paused')||s.writeReport&&s.writeReport.status!=='complete';
+    const label=controller.isBusy?controller.operationKind==='write'?'正在写入核对':s.progress.phase==='reading'?'正在读取':s.progress.phase==='pausing'?'正在暂停':`扫描 ${s.progress.total?Math.floor(s.progress.processed/s.progress.total*100):0}%`:issue?'需处理':state.page==='result'||s.progress.phase==='complete'?'已完成':'开始整理';entry.textContent=`歌单整理 · ${label}`;entry.dataset.status=issue?'attention':controller.isBusy?'busy':'ready';
+    for(const b of Array.from(menu.children) as HTMLButtonElement[])b.disabled=controller.isBusy&&b.dataset.action!=='remove';
+    if(op&&op.status!=='running'&&op.id>announced){announced=op.id;toast.textContent=op.status==='succeeded'?'准备或核对已完成，展开查看':op.status==='paused'?'任务已暂停，展开继续或核对':'需要处理，展开查看原因';toast.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toast.hidden=true;},4000);}
+    view.update(state);
   }
-  const unsubscribe=controller.subscribe(()=>{if(renderTimer!==undefined)return;renderTimer=setTimeout(()=>{renderTimer=undefined;render();},100);});
+  let lastBusy=controller.isBusy;
+  const unsubscribe=controller.subscribe(()=>{const immediate=!controller.isBusy||controller.isBusy!==lastBusy;lastBusy=controller.isBusy;if(immediate){if(renderTimer!==undefined){clearTimeout(renderTimer);renderTimer=undefined;}render();return;}if(renderTimer!==undefined)return;renderTimer=setTimeout(()=>{renderTimer=undefined;render();},250);});
+  const metricsTimer=setInterval(()=>{if(!state.collapsed)view.update(state);},1000);
   const accountTimer=setInterval(()=>{void controller.checkAccount();},15000);
   const onVisibility=()=>{if(doc.visibilityState==='visible')void controller.checkAccount();};
-  const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){panel.hidden=true;entry.setAttribute('aria-expanded','false');}};
-  const onUnload=()=>controller.remove();
-  doc.defaultView?.addEventListener('beforeunload',onUnload);
-  doc.addEventListener('visibilitychange',onVisibility);doc.addEventListener('keydown',onKey);
-  const instance:OrganizerInstance={show(){if(removed)return;panel.hidden=false;entry.setAttribute('aria-expanded','true');render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
-  scope.__ncmOrganizerV1=instance;entry.onclick=()=>instance.show();render();return instance;
+  const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();};
+  const onUnload=()=>instance.remove();doc.defaultView?.addEventListener('beforeunload',onUnload);doc.addEventListener('visibilitychange',onVisibility);doc.addEventListener('keydown',onKey);
+  const instance:OrganizerInstance={show(){if(removed)return;applyAmbientTheme(host,resolveAmbientTheme(doc));state.collapsed=false;render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);clearInterval(metricsTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);if(toastTimer!==undefined)clearTimeout(toastTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);view.dispose();entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
+  scope.__ncmOrganizerV1=instance;render();return instance;
 }
 if(typeof window!=='undefined'&&typeof document!=='undefined')mountOrganizer();
