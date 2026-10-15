@@ -75,20 +75,23 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const topbar=doc.querySelector('header, [class*="topbar"], [class*="TopBar"]');
   const bottom=topbar?.getBoundingClientRect().bottom;if(bottom&&bottom>0&&bottom<160)host.style.setProperty('--safe-top',`${bottom+8}px`);
   const shadow=host.attachShadow({mode:'open'});shadow.append(textElement(doc,'style',styles));
-  const entry=actionButton(doc,'歌单整理','entry',()=>instance.show());entry.className='entry';entry.setAttribute('aria-expanded','true');
-  const panel=textElement(doc,'section','');panel.className='panel';panel.dataset.action='workspace';panel.setAttribute('role','region');panel.setAttribute('aria-label','歌单整理工作区');
+  const entry=actionButton(doc,'','entry',()=>{instance.show();panel.focus();});entry.className='entry';entry.setAttribute('aria-expanded','true');
+  const entryIcon=textElement(doc,'span','♫');entryIcon.className='entry-icon';entryIcon.setAttribute('aria-hidden','true');
+  const entryCopy=textElement(doc,'span','');entryCopy.className='entry-copy';
+  const entryTitle=textElement(doc,'strong','歌单整理'),entryStatus=textElement(doc,'span','');entryStatus.className='entry-status';entryCopy.append(entryTitle,entryStatus);entry.append(entryIcon,entryCopy);
+  const panel=textElement(doc,'section','');panel.className='panel';panel.dataset.action='workspace';panel.setAttribute('role','region');panel.setAttribute('aria-label','歌单整理工作区');panel.tabIndex=-1;
   const header=textElement(doc,'header','');header.className='workspace-header';const brand=textElement(doc,'div','');brand.append(textElement(doc,'small','PLAYLIST ORGANIZER'),textElement(doc,'h1','歌单整理'));
   const controls=textElement(doc,'div','');controls.className='header-actions';
   const menu=textElement(doc,'div','');menu.className='more-menu';menu.hidden=true;
   const more=actionButton(doc,'更多 ···','more',()=>{state.moreMenuOpen=!state.moreMenuOpen;menu.hidden=!state.moreMenuOpen;more.setAttribute('aria-expanded',String(state.moreMenuOpen));});more.setAttribute('aria-expanded','false');
-  const collapse=()=>{state.collapsed=true;render();};
+  const collapse=()=>{state.collapsed=true;render();entry.focus();};
   controls.append(more,actionButton(doc,'收起 ↗','collapse',collapse));header.append(brand,controls);panel.append(header);const view=createWorkspaceView(doc,panel,controller,{openPlaylist:options.openPlaylist??createPlaylistNavigator(doc)});
   const confirmMaintenance=(text:string,fn:()=>unknown)=>{if(doc.defaultView?.confirm?.(text))void fn();};
   menu.append(actionButton(doc,'重新读取收藏','reread',()=>controller.prepareCollection()),actionButton(doc,'强制更新元数据','refresh',()=>controller.forceRefresh()),actionButton(doc,'清理扫描缓存','clear-cache',()=>confirmMaintenance('清理本账号扫描缓存？写入日志会保留。',()=>controller.clearCache())),actionButton(doc,'移除工具','remove',()=>confirmMaintenance('移除整理工具？正在发出的请求仍可能完成。',()=>instance.remove())));panel.append(menu);
   const toast=textElement(doc,'div','');toast.className='toast';toast.hidden=true;toast.setAttribute('role','status');shadow.append(entry,panel,toast);(doc.body??doc.documentElement).append(host);
   function render(){if(removed)return;const previousContext=state.contextKey;state=reconcileWorkspace(state,controller);const opNow=controller.uiOperation;const contextChanged=previousContext!==state.contextKey;if(contextChanged||opNow?.status==='running'){toast.hidden=true;if(toastTimer!==undefined){clearTimeout(toastTimer);toastTimer=undefined;}if(contextChanged&&previousContext!==null)announced=Math.max(announced,(opNow?.id??0)-(opNow?.status==='running'?1:0));}panel.hidden=state.collapsed;more.setAttribute('aria-expanded',String(state.moreMenuOpen&&!state.collapsed));menu.hidden=!state.moreMenuOpen||state.collapsed;entry.setAttribute('aria-expanded',String(!state.collapsed));const s=controller.model.state,op=controller.uiOperation;
     const issue=controller.needsAttention||op&&(op.status==='failed'||op.status==='paused')||s.writeReport&&s.writeReport.status!=='complete';
-    const label=entryLabel(state,controller);entry.textContent=`歌单整理 · ${label}`;entry.dataset.status=issue?'attention':controller.isBusy?'busy':'ready';
+    const label=entryLabel(state,controller);entryStatus.textContent=label;entry.hidden=!state.collapsed;entry.setAttribute('aria-label',`打开歌单整理，${label}`);entry.dataset.status=issue?'attention':controller.isBusy?'busy':'ready';
     for(const b of Array.from(menu.children) as HTMLButtonElement[])b.disabled=controller.isBusy&&b.dataset.action!=='remove';
     if(op&&op.status!=='running'&&op.id>announced){announced=op.id;toast.textContent=operationNotice(controller);toast.hidden=false;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toast.hidden=true;},4000);}
     view.update(state);
@@ -98,7 +101,7 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const metricsTimer=setInterval(()=>{if(!state.collapsed&&state.page==='prepare')view.update(state);},1000);
   const accountTimer=setInterval(()=>{void controller.checkAccount();},15000);
   const onVisibility=()=>{if(doc.visibilityState==='visible')void controller.checkAccount();};
-  const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();};
+  const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();if(state.collapsed)entry.focus();};
   const onUnload=()=>instance.remove();doc.defaultView?.addEventListener('beforeunload',onUnload);doc.addEventListener('visibilitychange',onVisibility);doc.addEventListener('keydown',onKey);
   const instance:OrganizerInstance={show(){if(removed)return;if(state.collapsed)applyAmbientTheme(host,resolveAmbientTheme(doc));state.collapsed=false;render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);clearInterval(metricsTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);if(toastTimer!==undefined)clearTimeout(toastTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);view.dispose();entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
   scope.__ncmOrganizerV1=instance;render();return instance;

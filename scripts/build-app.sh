@@ -12,6 +12,7 @@ if [[ ! -s "$panel" ]]; then
 fi
 "$root/scripts/swift-local.sh" build --package-path "$root/launcher" -c release
 binary_dir="$("$root/scripts/swift-local.sh" build --package-path "$root/launcher" -c release --show-bin-path)"
+bash "$root/scripts/build-icon.sh"
 app="$root/work/dist/网易云歌单整理.app"
 # Only replace this project's own generated bundle.
 rm -rf "$app"
@@ -19,6 +20,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary_dir/OrganizerLauncher" "$app/Contents/MacOS/OrganizerLauncher"
 /usr/bin/lipo "$app/Contents/MacOS/OrganizerLauncher" -verify_arch arm64
 cp "$panel" "$app/Contents/Resources/panel.js"
+cp "$root/work/dist/OrganizerIcon.icns" "$app/Contents/Resources/OrganizerIcon.icns"
 cp "$root/LICENSE" "$app/Contents/Resources/LICENSE"
 cp "$root/THIRD_PARTY_NOTICES.md" "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
 # Verify the packaged resource is exactly the implemented bundle, before signing.
@@ -31,8 +33,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>网易云歌单整理</string>
 <key>CFBundleDisplayName</key><string>网易云歌单整理</string>
 <key>CFBundleExecutable</key><string>OrganizerLauncher</string>
+<key>CFBundleIconFile</key><string>OrganizerIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><false/>
@@ -59,6 +62,7 @@ extracted="$validation/网易云歌单整理.app"
 /usr/bin/lipo "$extracted/Contents/MacOS/OrganizerLauncher" -verify_arch arm64
 cmp "$app/Contents/MacOS/OrganizerLauncher" "$extracted/Contents/MacOS/OrganizerLauncher"
 cmp "$panel" "$extracted/Contents/Resources/panel.js"
+cmp "$root/work/dist/OrganizerIcon.icns" "$extracted/Contents/Resources/OrganizerIcon.icns"
 cmp "$root/LICENSE" "$extracted/Contents/Resources/LICENSE"
 cmp "$root/THIRD_PARTY_NOTICES.md" "$extracted/Contents/Resources/THIRD_PARTY_NOTICES.md"
 mv "$temporary" "$archive"

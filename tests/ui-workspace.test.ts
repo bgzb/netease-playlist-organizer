@@ -28,6 +28,21 @@ test('uncertain and read-only recovery reports never unlock successful result',(
 import {testDocument,walk} from './fixtures/dom';
 import {mountOrganizer} from '../panel/ui/entry';
 const tick=()=>new Promise(r=>setTimeout(r,280));
+test('collapsed launcher remains reachable and returns focus to the workspace when reopened',t=>{
+ const {doc,listeners}=testDocument(),{c}=setup();
+ const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());
+ const host=doc.body.children[0],root=host.shadowRoot!;
+ const action=(key:string)=>walk(root).find(n=>n.dataset.action===key)!;
+ const entry=action('entry'),panel=action('workspace');
+ assert.equal(entry.hidden,true,'expanded workspace has no floating launcher over its controls');
+ action('collapse').focus();action('collapse').onclick!();
+ assert.equal(panel.hidden,true);assert.equal(entry.hidden,false);assert.equal(doc.activeElement,entry);
+ assert.match(entry.attributes['aria-label'],/打开歌单整理/);
+ entry.onclick!();assert.equal(panel.hidden,false);assert.equal(entry.hidden,true);assert.equal(doc.activeElement,panel);
+ listeners.get('keydown')!({key:'Escape',composedPath:()=>[panel,host]});
+ assert.equal(panel.hidden,true);assert.equal(entry.hidden,false);assert.equal(doc.activeElement,entry);
+ app.show();assert.equal(entry.hidden,true);assert.equal(panel.hidden,false);
+});
 test('workspace mounts only current page; collapse keeps atomic task alive and completes without focus theft',async(t)=>{
  const {doc,listeners}=testDocument();const {c}=setup();const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());const host=doc.body.children[0],root=host.shadowRoot!;
  const action=(key:string)=>{const e=walk(root).find(e=>e.dataset.action===key);assert.ok(e,key);return e;};
