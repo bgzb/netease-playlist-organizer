@@ -49,6 +49,7 @@ action('write-confirm').onclick();await new Promise(r=>setTimeout(r,180));
 assert.equal(writes.length,2);assert.equal(writes[0].path,'/api/playlist/create');assert.equal(writes[0].data.privacy,10);assert.equal(writes[0].data.type,'NORMAL');assert.equal(writes[1].data.op,'add');assert.equal(targetTracks.size,3);
 action('back-filter').onclick();action('to-write').onclick();button('恢复核对（只读）').onclick();await new Promise(r=>setTimeout(r,180));assert.equal(writes.length,2);
 button('审阅写入清单').onclick();await new Promise(r=>setTimeout(r,130));action('write-confirm').onclick();await new Promise(r=>setTimeout(r,180));assert.equal(writes.length,2);
+action('finish').onclick();const finished=walk(body.children[0].shadowRoot);assert.equal(finished.find(e=>e.dataset.action==='workspace').hidden,false);assert.ok(finished.some(e=>e.dataset.page==='filter'));assert.equal(writes.length,2);
 assert.equal(instance.status().writeVerification,'unverified');assert.equal(JSON.stringify(instance.status()).includes('uid'),false);
 instance.remove();assert.equal(body.children.length,0);assert.equal(intervals.size,0);assert.equal(listeners.size,0);assert.equal(context.__ncmOrganizerV1,undefined);run();assert.notEqual(context.__ncmOrganizerV1,instance);context.__ncmOrganizerV1.remove();
 console.log(JSON.stringify({bundle:process.argv[2]??'work/dist/panel.js',syntheticTotal:3,processed:3,artistCoverage:2/3,writeRequests:writes.length,unconfirmedWrites:0,repeatWrites:0,renderedHTMLNodes:0,reuseRemoveReinject:'pass',rawStatusData:'absent',readCalls:calls.length}));
