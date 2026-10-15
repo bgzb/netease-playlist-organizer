@@ -68,7 +68,12 @@ export function coverage(songs:SongRecord[]):{artists:number;genres:number;bpm:n
   return result;
 }
 export type PanelDependencies={readLibrary:(signal:AbortSignal)=>Promise<LibrarySnapshot>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
+export type UiOperation = { id:number; kind:'prepare'|'scan'|'write'|'recovery'; status:'running'|'succeeded'|'paused'|'failed' };
 export class PanelController {
+  private operationSequence=0;
+  private notification:UiOperation|null=null;
+  get uiOperation():Readonly<UiOperation>|null{return this.notification;}
+  get operationKind():'idle'|UiOperation['kind']{return this.busy?this.notification?.kind??'idle':'idle';}
   readonly model=new PanelModel(()=>{if(this.writing)this.operation?.abort();});
   private writing=false;
   private operation:AbortController|null=null;
@@ -99,12 +104,14 @@ export class PanelController {
     monitor?.abort();
   }
 
-  private async run(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  private async run(work: (signal: AbortSignal) => Promise<void>, kind:UiOperation['kind']='recovery'): Promise<void> {
     if (!this.alive || this.busy || !this.readReady) return;
     // A foreground read/scan owns publication from here onward, even if an old
     // client request ignores cancellation and eventually settles.
     this.invalidateMonitor();
     this.busy = true;
+    this.notification={id:++this.operationSequence,kind,status:'running'};
+    let failed=false;
     const operation = new AbortController();
     this.operation = operation;
     this.deps.setSignal?.(operation.signal);
@@ -112,6 +119,7 @@ export class PanelController {
     try {
       await work(operation.signal);
     } catch (error) {
+      failed=true;
       if (this.alive) this.error(error);
     } finally {
       if (this.operation === operation) {
@@ -119,11 +127,20 @@ export class PanelController {
         this.deps.setSignal?.(undefined);
       }
       this.busy = false;
+      const complete=kind==='write'?this.model.state.writeReport?.status==='complete'&&!this.model.state.writeReport.unconfirmedIds.length:(kind==='prepare'||kind==='scan')&&this.model.state.progress.phase==='complete';
+      this.notification={id:this.operationSequence,kind,status:failed?'failed':complete?'succeeded':operation.signal.aborted||kind==='prepare'||kind==='scan'||kind==='write'?'paused':'succeeded'};
       this.changed();
     }
   }
-  async readLibrary():Promise<void> {
+  async prepareCollection():Promise<void>{
     await this.run(async signal=>{
+      await this.readCollection(signal);
+      if(!this.alive||signal.aborted||!this.model.state.snapshot)return;
+      await this.scanCollection(signal);
+    },'prepare');
+  }
+  async readLibrary():Promise<void>{await this.run(signal=>this.readCollection(signal),'prepare');}
+  private async readCollection(signal:AbortSignal):Promise<void>{
       this.model.clearLibrary();
       this.model.state.progress.phase='reading';
       this.model.state.message='正在重新读取完整收藏，请等待来源和顺序核对。';
@@ -135,15 +152,17 @@ export class PanelController {
       this.model.state.message=`完整收藏已读取：${snapshot.ids.length} 首。开始或继续全量元数据扫描。`;
       this.changed();
       const targets=await this.deps.readTargets(snapshot.uid,snapshot.sourcePlaylistId,signal);
-      if(await this.deps.readUid()!==snapshot.uid)throw new ReadError('accountChanged');
+      if(!this.alive||signal.aborted)return;
+      if(await this.deps.readUid(signal)!==snapshot.uid)throw new ReadError('accountChanged');
       if(!this.alive||signal.aborted)return;
       this.model.setTargets(targets);
       this.model.state.recoveryJournal=this.deps.store.load(snapshot.uid)?.writeJournal??null;
-    });
   }
   async scan(): Promise<void> {
     if (!this.model.state.snapshot) return;
-    await this.run(async signal => {
+    await this.run(signal=>this.scanCollection(signal),'scan');
+  }
+  private async scanCollection(signal:AbortSignal):Promise<void>{
       const snapshot = this.model.state.snapshot!;
       const scanner = this.deps.scanner;
       const generation = scanner.generation + 1;
@@ -177,7 +196,6 @@ export class PanelController {
         if (ownsOperation()) this.model.setProgress(scanner.status, scanner.status.persisted);
         throw error;
       }
-    });
   }
   prepareWrite():void {
     if(this.busy||!this.alive||!this.deps.writer||!this.model.canPrepare())return;
@@ -240,7 +258,7 @@ export class PanelController {
         const label={complete:'写入读回核对完成',paused:'写入已暂停',uncertain:'写入结果待核对',error:'写入检查失败'}[report.status];
         this.model.state.message=`${label}：新增 ${report.addedIds.length}，已存在 ${report.alreadyPresentIds.length}，待核对 ${report.unconfirmedIds.length}。${report.errors.length?`原因：${report.errors.map(writeReasonText).join('、')}。`:''}恢复时需重新审阅和确认。`;
       }finally{this.writing=false;}
-    });
+    },'write');
   }
   async reviewRecovery():Promise<void> {
     const journal=this.model.state.uid?this.deps.store.load(this.model.state.uid)?.writeJournal:null;
@@ -285,7 +303,7 @@ export class PanelController {
       this.model.state.message='已明确选用候选目标；尚未添加歌曲。请重新审阅完整清单并最终确认。';
     });
   }
-  pause():void{this.operation?.abort();}
+  pause():void{if(this.operation){this.model.state.progress.phase='pausing';this.model.state.message='正在暂停，等待已发出的请求收尾。';this.operation.abort();this.changed();}}
   async forceRefresh():Promise<void>{if(this.busy||!this.model.state.snapshot)return;this.deps.scanner.forceRefresh();this.model.state.confirmation=null;await this.scan();}
   async retryPersistence():Promise<void>{if(this.busy)return;this.deps.scanner.retryPersistence();await this.scan();}
   continuePageOnly():void{if(this.busy)return;this.deps.scanner.continueWithoutPersistence();this.model.state.persisted=false;this.model.state.message='已明确选择仅本页继续；关闭页面后无法恢复未保存进度。';this.changed();}

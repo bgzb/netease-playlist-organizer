@@ -1,0 +1,31 @@
+import type { PanelController } from './panel';
+export type WorkspacePage='prepare'|'filter'|'write'|'result';
+export type ResultGroup='matched'|'unknown'|'unmatched';
+export type WorkspaceState={page:WorkspacePage;collapsed:boolean;resultGroup:ResultGroup;pages:Record<ResultGroup,number>;detailSongId:string|null;filterPanelOpen:boolean;moreMenuOpen:boolean;contextKey:string|null;handledOperationId:number};
+export const createWorkspaceState=():WorkspaceState=>({page:'prepare',collapsed:false,resultGroup:'matched',pages:{matched:0,unknown:0,unmatched:0},detailSongId:null,filterPanelOpen:false,moreMenuOpen:false,contextKey:null,handledOperationId:0});
+export function canEnterPage(page:WorkspacePage,c:PanelController):boolean{
+ const s=c.model.state;
+ if(page==='prepare')return !c.isWriting;
+ if(page==='result')return !!s.writeReport&&s.writeReport.status==='complete'&&s.writeReport.unconfirmedIds.length===0&&s.writeReport.errors.length===0&&!c.isBusy;
+ if(page==='write'&&(c.isWriting||s.recoveryJournal))return !!s.snapshot;
+ if(c.isBusy||!s.snapshot||s.progress.phase!=='complete')return false;
+ if(page==='filter')return true;
+ const p=c.model.preview();return p.ids.length>0&&!p.error;
+}
+export function reconcileWorkspace(state:WorkspaceState,c:PanelController):WorkspaceState{
+ const s=c.model.state,op=c.uiOperation;
+ const key=s.snapshot?JSON.stringify([s.uid,s.snapshot.sourcePlaylistId,s.snapshot.revision]):s.uid;
+ let next={...state,pages:{...state.pages}};
+ if(key!==state.contextKey){
+   next={...createWorkspaceState(),collapsed:state.collapsed,contextKey:key,handledOperationId:state.contextKey===null&&key!==null&&op?.kind==='prepare'?state.handledOperationId:op?.id??state.handledOperationId};
+   // A context acquired by a running prepare may consume its completion later.
+   if(op?.status==='running')next.handledOperationId=op.id-1;
+ }
+ if(op&&op.status!=='running'&&op.id>next.handledOperationId){
+   next.handledOperationId=op.id;
+   if(op.status==='succeeded'&&(op.kind==='prepare'||op.kind==='scan')&&canEnterPage('filter',c))next.page='filter';
+   if(op.status==='succeeded'&&op.kind==='write'&&canEnterPage('result',c))next.page='result';
+ }
+ if(!canEnterPage(next.page,c))next.page=c.isWriting&&s.snapshot?'write':'prepare';
+ return next;
+}
