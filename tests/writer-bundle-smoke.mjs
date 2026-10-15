@@ -9,7 +9,7 @@ class Element {
   append(...nodes){for(const node of nodes){this.children.push(node);node.parent=this;}}
   replaceChildren(...nodes){for(const node of this.children)node.parent=null;this.children=[];this.append(...nodes);}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(x=>x!==this);this.parent=null;}
-  setAttribute(k,v){this.attributes[k]=v;}
+  setAttribute(k,v){this.attributes[k]=v;}removeAttribute(k){delete this.attributes[k];}
   attachShadow(){this.shadowRoot=new Element('shadow');return this.shadowRoot;}
   querySelector(){return null;}focus(){}getBoundingClientRect(){return {bottom:55};}
 }

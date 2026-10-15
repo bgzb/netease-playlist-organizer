@@ -9,6 +9,7 @@ export function actionButton(doc:Document,label:string,key:string,action:()=>unk
 const phaseText:Record<string,string>={reading:'正在读取收藏',scanning:'正在扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'准备完成',error:'准备遇到问题'};
 export const duration=(ms:number)=>ms<60000?`${Math.floor(ms/1000)} 秒`:`${Math.floor(ms/60000)} 分 ${Math.floor(ms/1000)%60} 秒`;
 export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController):{update(state:WorkspaceState):void;dispose():void}{
+ let prepareView:{update():void}|null=null;let prepareOperationId=0;let renderedContext:string|null=null;
  let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;let targetMode:'new'|'existing'|null=null;let reviewPage=0;let reviewTask:string|null=null;let viewContext:string|null=null;const searches:Record<string,string>={};
  const nav=textElement(doc,'nav','');nav.className='stages';nav.setAttribute('aria-label','整理阶段');
  const body=textElement(doc,'main','');body.className='workspace-body';
@@ -19,26 +20,62 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
  const focusHeading=()=>{const title=body.querySelector('h2');if(title){title.tabIndex=-1;title.focus();}};
  function go(page:WorkspacePage){if(!canEnterPage(page,controller))return;if(page==='filter'){controller.model.state.writeReview=null;controller.model.state.confirmation=null;}state.page=page;state.recoveryMode=false;state.detailSongId=null;state.filterPanelOpen=false;changed();}
  function recovery(){if(!controller.model.state.snapshot||!controller.model.state.recoveryJournal||controller.isBusy)return;state.recoveryMode=true;state.page='write';state.detailSongId=null;changed();}
- function prepare(){const s=controller.model.state;const box=textElement(doc,'section','');box.className='prepare-page';
-  const hero=textElement(doc,'div','');hero.className='hero';hero.append(textElement(doc,'span','YOUR COLLECTION, RECOMPOSED'),textElement(doc,'h2',s.snapshot?'让喜欢的音乐，各得其所。':'从喜欢，找到新的共鸣。'),textElement(doc,'p','读取收藏并准备筛选数据，用曲风、语种、歌手与节奏，整理属于你的歌单。'));box.append(hero);
-  const status=textElement(doc,'section','');status.className='scan-status';status.append(textElement(doc,'h3',controller.isBusy?phaseText[s.progress.phase]??'正在准备':s.snapshot?phaseText[s.progress.phase]:'准备你的音乐收藏'));
-  if(s.snapshot||controller.isBusy){const p=s.progress;const bar=doc.createElement('progress');bar.max=Math.max(1,p.total);if(p.phase!=='reading')bar.value=p.processed;status.append(bar,textElement(doc,'p',p.total?`${p.processed.toLocaleString()} / ${p.total.toLocaleString()} 首${p.phase==='reading'?'':` · ${Math.floor(p.processed/p.total*100)}%`}`:'正在核对收藏与目标信息'));const metrics=textElement(doc,'div','');metrics.className='metrics';metrics.dataset.action='scan-metrics';status.append(metrics);}
-  if(!controller.isBusy&&s.snapshot?.ids.length===0)status.append(textElement(doc,'p','收藏中暂无歌曲'));
-  const message=textElement(doc,'p',s.message);message.className='notice';status.append(message);
-  const details=textElement(doc,'details','');details.append(textElement(doc,'summary','查看准备详情'));
-  const rates=coverage(s.snapshot?.songs??[]);for(const [k,label] of [['artists','歌手'],['genres','曲风'],['bpm','BPM'],['language','语种']] as const)details.append(textElement(doc,'p',`${label}覆盖率 ${Math.round(rates[k]*100)}%`));
-  details.append(textElement(doc,'p',s.persisted?'扫描检查点已保存，继续时会重新核对账号与收藏。':'进度仅保留在本次页面；未保存的进度不能跨重启恢复。'));
-  for(const [key,label] of [['genres','曲风'],['bpm','BPM'],['language','语种']] as const)if(s.snapshot?.songs.some(song=>song[key].reason?.includes('维度已暂停')))details.append(textElement(doc,'p',`${label}来源暂不可用，可在更多中强制更新。`));
-  if(s.recoveryJournal)details.append(textElement(doc,'p','保留了一份写入日志。请先完成准备，再到写入页显式恢复核对。'));status.append(details);box.append(status);body.append(box);
-  if(controller.isBusy)footer.append(actionButton(doc,s.progress.phase==='pausing'?'正在暂停…':'暂停准备','pause',()=>controller.pause(),controller.isPausing));
-  else if(s.snapshot&&s.progress.phase==='paused'&&controller.storageBlocked&&!controller.needsPreparation){footer.append(actionButton(doc,'重试保存并继续','retry-storage',()=>controller.retryPersistence()),actionButton(doc,'仅本页继续','page-only',()=>{controller.continuePageOnly();return controller.scan();}));}
-  else {const b=actionButton(doc,controller.needsPreparation?'重新准备':s.snapshot&&s.progress.phase!=='complete'?'继续准备':'开始整理','prepare',()=>s.snapshot&&s.progress.phase!=='complete'&&!controller.needsPreparation?controller.scan():controller.prepareCollection(),!controller.status().readReady);b.className='primary';footer.append(b);if(s.progress.phase==='complete'&&s.snapshot?.ids.length)footer.append(actionButton(doc,'前往筛选','to-filter',()=>go('filter')));}
-  if(s.recoveryJournal&&!controller.isBusy)footer.append(actionButton(doc,'查看写入日志','open-recovery',recovery));
+ function prepare(){
+  const box=textElement(doc,'section','');box.className='prepare-page';
+  const hero=textElement(doc,'div','');hero.className='hero';
+  const eyebrow=textElement(doc,'span','YOUR COLLECTION, RECOMPOSED');
+  const title=textElement(doc,'h2','');
+  hero.append(eyebrow,title,textElement(doc,'p','读取收藏并准备筛选数据，用曲风、语种、歌手与节奏，整理属于你的歌单。'));
+  const status=textElement(doc,'section','');status.className='scan-status';
+  const phase=textElement(doc,'h3',''),bar=doc.createElement('progress'),count=textElement(doc,'p','');
+  const metrics=textElement(doc,'div','');metrics.className='metrics';metrics.dataset.action='scan-metrics';
+  const empty=textElement(doc,'p','收藏中暂无歌曲');
+  const message=textElement(doc,'p','');message.className='notice';
+  const details=textElement(doc,'details','');details.dataset.action='prepare-details';details.append(textElement(doc,'summary','查看准备详情'));
+  const rates=new Map<string,HTMLElement>();
+  for(const [key,label] of [['artists','歌手'],['genres','曲风'],['bpm','BPM'],['language','语种']] as const){const node=textElement(doc,'p','');rates.set(key,node);details.append(node);}
+  const persistence=textElement(doc,'p','');details.append(persistence);
+  const suspended=new Map<string,HTMLElement>();
+  for(const [key,label] of [['genres','曲风'],['bpm','BPM'],['language','语种']] as const){const node=textElement(doc,'p',`${label}来源暂不可用，可在更多中强制更新。`);suspended.set(key,node);details.append(node);}
+  const journal=textElement(doc,'p','保留了一份写入日志，可通过“查看写入日志”显式恢复核对。');details.append(journal);
+  status.append(phase,bar,count,metrics,empty,message,details);box.append(hero,status);body.append(box);
+  const pause=actionButton(doc,'暂停准备','pause',()=>controller.pause());
+  const retry=actionButton(doc,'重试保存并继续','retry-storage',()=>controller.retryPersistence());
+  const pageOnly=actionButton(doc,'仅本页继续','page-only',()=>{controller.continuePageOnly();return controller.scan();});
+  const start=actionButton(doc,'开始整理','prepare',()=>{const s=controller.model.state;return s.snapshot&&s.progress.phase!=='complete'&&!controller.needsPreparation?controller.scan():controller.prepareCollection();});start.className='primary';
+  const filter=actionButton(doc,'前往筛选','to-filter',()=>go('filter'));
+  const saved=actionButton(doc,'查看写入日志','open-recovery',recovery);
+  footer.append(pause,retry,pageOnly,start,filter,saved);
+  const text=(node:HTMLElement,value:string)=>{if(node.textContent!==value)node.textContent=value;};
+  const button=(node:HTMLButtonElement,visible:boolean,disabled=false)=>{node.hidden=!visible;node.disabled=!visible||disabled;};
+  prepareView={update(){
+   const s=controller.model.state,p=s.progress,busy=controller.isBusy,hasProgress=!!s.snapshot||busy;
+   const resuming=busy&&p.phase==='paused'&&!controller.isPausing;
+   text(title,s.snapshot?'让喜欢的音乐，各得其所。':'从喜欢，找到新的共鸣。');
+   text(phase,busy?(controller.needsPreparation?'正在读取并核对收藏':resuming?'正在核对收藏':phaseText[p.phase]??'正在准备'):s.snapshot?phaseText[p.phase]:'准备你的音乐收藏');
+   bar.hidden=!hasProgress;count.hidden=!hasProgress;metrics.hidden=!hasProgress;
+   const reading=p.phase==='reading'||busy&&controller.needsPreparation||resuming;
+   bar.max=Math.max(1,p.total);if(reading)bar.removeAttribute('value');else bar.value=p.processed;
+   text(count,reading?(s.snapshot?`已读取 ${p.total.toLocaleString()} 首，正在核对收藏与目标信息`:'正在读取收藏与目标信息'):p.total?`${p.processed.toLocaleString()} / ${p.total.toLocaleString()} 首 · ${Math.floor(p.processed/p.total*100)}%`:p.phase==='complete'?'没有需要扫描的歌曲':'正在核对收藏与目标信息');
+   empty.hidden=busy||s.snapshot?.ids.length!==0;text(message,s.message);
+   const current=coverage(s.snapshot?.songs??[]);
+   for(const [key,label] of [['artists','歌手'],['genres','曲风'],['bpm','BPM'],['language','语种']] as const)text(rates.get(key)!,`${label}覆盖率 ${Math.round(current[key]*100)}%`);
+   text(persistence,s.persisted?'扫描检查点已保存，继续时会重新核对账号与收藏。':'进度仅保留在本次页面；未保存的进度不能跨重启恢复。');
+   for(const key of ['genres','bpm','language'] as const)suspended.get(key)!.hidden=!s.snapshot?.songs.some(song=>song[key].reason?.includes('维度已暂停'));
+   journal.hidden=!s.recoveryJournal;
+   const storage=!busy&&!!s.snapshot&&p.phase==='paused'&&controller.storageBlocked&&!controller.needsPreparation;
+   text(pause,controller.isPausing?'正在暂停…':'暂停准备');button(pause,busy,controller.isPausing);
+   button(retry,storage);button(pageOnly,storage);button(start,!busy&&!storage,!controller.status().readReady);
+   text(start,controller.needsPreparation?'重新准备':s.snapshot&&p.phase!=='complete'?'继续准备':'开始整理');
+   button(filter,!busy&&!storage&&p.phase==='complete'&&!!s.snapshot?.ids.length);button(saved,!busy&&!!s.recoveryJournal);
+   prepareOperationId=controller.uiOperation?.id??0;
+  }};
+  prepareView.update();
  }
  function render(){
-  const s=controller.model.state;previewView=null;nav.replaceChildren();body.replaceChildren();footer.replaceChildren();
+  const s=controller.model.state;previewView=null;prepareView=null;nav.replaceChildren();body.replaceChildren();footer.replaceChildren();
   for(const [i,page,label] of [[1,'prepare','准备收藏'],[2,'filter','筛选歌曲'],[3,'write','写入歌单'],[4,'result','整理结果']] as const){const b=actionButton(doc,`${i}  ${label}`,`nav-${page}`,()=>go(page),!canEnterPage(page,controller));b.setAttribute('aria-current',state.page===page?'step':'false');if(b.disabled)b.title=page==='result'?'完成写入并读回核对后可查看':'请先完成准备，并选择有效歌曲';nav.append(b);}
-  body.dataset.page=state.page;
+  body.dataset.page=state.page;renderedContext=state.contextKey;
   if(state.page==='prepare')prepare();
   if(state.page==='filter'){
    const toggle=actionButton(doc,'筛选条件','toggle-filters',()=>{state.filterPanelOpen=!state.filterPanelOpen;changed();});toggle.className='filter-toggle';toggle.setAttribute('aria-expanded',String(state.filterPanelOpen));body.append(toggle);
@@ -65,12 +102,14 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
  }
  function updateMetrics(){const metrics=body.querySelector('[data-action="scan-metrics"]');if(!metrics)return;const m=controller.scanMetrics;metrics.textContent=`本次用时 ${duration(m.elapsedMs)}  ·  ${m.ratePerMinute===null?'速度正在估算':`${Math.round(m.ratePerMinute)} 首/分钟`}  ·  ${m.remainingMs===null?'剩余时间暂不可估算':m.remainingMs===0?'准备完成':`预计剩余约 ${duration(m.remainingMs)}`}`;}
  function update(next:WorkspaceState){
-  if(disposed)return;state=next;if(viewContext!==state.contextKey){viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
+  if(disposed)return;state=next;const contextChanged=viewContext!==state.contextKey;if(contextChanged){viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
   const filters=JSON.stringify(s.filters);if(lastFilters&&filters!==lastFilters){state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;}lastFilters=filters;
   const filterKey=JSON.stringify([state.contextKey,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
   const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.writeNotice,controller.isBusy]);
   const filterStable=state.page==='filter'&&body.dataset.page==='filter'&&filterIdentity===filterKey&&previewView;
-  if(key!==signature&&!filterStable){const oldPage=body.dataset.page;const scroll=body.scrollTop;const focused=(root.getRootNode?.() as ShadowRoot)?.activeElement as HTMLInputElement|null;const focusKey=focused?.dataset.key;const caret=focused?.selectionStart;signature=key;render();filterIdentity=filterKey;body.scrollTop=oldPage===state.page?scroll:0;if(oldPage!==state.page)focusHeading();else if(focusKey){const input=findKey(focusKey) as HTMLInputElement|null;if(input){input.focus();if(caret!=null&&['search','text'].includes(input.type))input.setSelectionRange(caret,caret);}else focusHeading();}}
+  const prepareStable=state.page==='prepare'&&body.dataset.page==='prepare'&&prepareView&&(renderedContext===state.contextKey||controller.uiOperation?.id===prepareOperationId&&controller.uiOperation?.kind==='prepare'&&controller.uiOperation?.status==='running'&&!controller.needsAttention);
+  if(key!==signature&&prepareStable){prepareView?.update();signature=key;renderedContext=state.contextKey;for(const page of ['prepare','filter','write','result'] as const){const b=findKey(`nav-${page}`) as HTMLButtonElement|null;if(b){b.disabled=!canEnterPage(page,controller);b.title=b.disabled?(page==='result'?'完成写入并读回核对后可查看':'请先完成准备，并选择有效歌曲'):'';}}}
+  else if(key!==signature&&!filterStable){const oldPage=body.dataset.page;const scroll=body.scrollTop;const focused=(root.getRootNode?.() as ShadowRoot)?.activeElement as HTMLInputElement|null;const focusKey=focused?.dataset.key;const caret=focused?.selectionStart;signature=key;render();filterIdentity=filterKey;body.scrollTop=oldPage===state.page?scroll:0;if(oldPage!==state.page)focusHeading();else if(focusKey){const input=findKey(focusKey) as HTMLInputElement|null;if(input){input.focus();if(caret!=null&&['search','text'].includes(input.type))input.setSelectionRange(caret,caret);}else focusHeading();}}
   if(state.page==='filter'){
    previewView?.update(state);const summary=footer.querySelector('[data-action="selection-summary"]');if(summary){summary.replaceChildren(textElement(doc,'strong',`总入选 ${controller.model.preview().ids.length} 首`),textElement(doc,'small',`人工加入 ${s.added.size} · 排除 ${s.removed.size}`));}
    const next=footer.querySelector('[data-key="to-write"]') as HTMLButtonElement|null;if(next)next.disabled=!canEnterPage('write',controller);
