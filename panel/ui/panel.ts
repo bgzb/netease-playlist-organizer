@@ -136,7 +136,7 @@ export class PanelController {
       if(!this.model.state.snapshot)this.progressMeter.reset();
       this.busy = false;
       const complete=kind==='write'?this.model.state.writeReport?.status==='complete'&&!this.model.state.writeReport.unconfirmedIds.length:(kind==='prepare'||kind==='scan')&&this.model.state.progress.phase==='complete';
-      this.notification={id:this.operationSequence,kind,status:failed?'failed':complete?'succeeded':operation.signal.aborted||kind==='prepare'||kind==='scan'||kind==='write'?'paused':'succeeded'};
+      this.notification={id:this.operationSequence,kind,status:failed||kind==='write'&&['error','uncertain'].includes(this.model.state.writeReport?.status??'')?'failed':complete?'succeeded':operation.signal.aborted||kind==='prepare'||kind==='scan'||kind==='write'?'paused':'succeeded'};
       this.changed();
     }
   }
@@ -232,7 +232,7 @@ export class PanelController {
       journal.review={filters:copyJson(s.filters),addedIds:[...s.added],removedIds:[...s.removed]};
       // A cancelled review must retain the prior unknown-create journal.
       if(!replanned)saveJournal(this.deps.store,journal);
-      if(!replanned)s.recoveryJournal=journal;s.confirmation=null;s.writeReview=plan;
+      if(!replanned)s.recoveryJournal=journal;s.confirmation=null;s.writeReview=plan;s.writeReport=null;s.writeProgress=null;
       s.message='请审阅完整清单、人工选择和目标可见性，然后点击最终确认。';
     }catch(error){this.error(error);}
     this.changed();

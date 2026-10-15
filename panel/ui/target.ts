@@ -27,17 +27,15 @@ export async function readTargets(read:ReadApi,uid:string,sourceId:string,signal
   }
   return [...targets.values()];
 }
-export function renderTarget(doc:Document,model:PanelModel,changed:()=>void):HTMLElement{
-  const box=textElement(doc,'section','');box.append(textElement(doc,'h2','单一目标歌单'));
-  const select=doc.createElement('select');select.dataset.key='target';select.setAttribute('aria-label','选择目标歌单');
-  for(const [value,label] of [['','请明确选择一个目标'],['new','新建私密歌单'],...model.state.targets.map(t=>[t.id,`${t.name} · ID ${t.id}`])]){const o=textElement(doc,'option',label) as HTMLOptionElement;o.value=value;select.append(o);}
-  select.value=model.state.target?.kind==='new'?'new':model.state.target?.kind==='existing'?model.state.target.id:'';
-  select.onchange=()=>{model.setTarget(select.value==='new'?{kind:'new',name:'整理·筛选结果',privacy:10}:select.value?{kind:'existing',id:select.value}:null);changed();};box.append(select);
-  if(model.state.target?.kind==='new'){const input=doc.createElement('input');input.dataset.key='target-name';input.setAttribute('aria-label','新私密歌单名称');input.value=model.state.target.name;input.maxLength=100;input.oninput=()=>{model.setTarget({kind:'new',name:input.value,privacy:10});changed();};box.append(input,textElement(doc,'p','新目标默认私密；最终确认后才创建。'));}
-  box.append(textElement(doc,'p','仅显示本人创建的普通歌单，排除“我喜欢”、订阅和特殊歌单。相同名称以 ID 区分。'));
-  return box;
+function action(doc:Document,label:string,key:string,fn:()=>unknown,disabled=false){const b=textElement(doc,'button',label);b.dataset.key=key;b.dataset.action=key;b.disabled=disabled;b.onclick=()=>{if(!b.disabled)return fn();};return b;}
+export function renderTarget(doc:Document,model:PanelModel,options:{changed:()=>void;mode:'new'|'existing'|null;setMode:(mode:'new'|'existing')=>void}):HTMLElement{
+ const box=textElement(doc,'section','');box.className='target-picker';const modes=textElement(doc,'div','');modes.className='target-modes';
+ for(const [key,label,description] of [['new','新建私密歌单','为这份共鸣，留一个新位置'],['existing','已有歌单','添加到你的可写歌单']] as const){const b=action(doc,label,`target-${key}`,()=>{options.setMode(key);model.setTarget(key==='new'?{kind:'new',name:'整理·筛选结果',privacy:10}:null);options.changed();});b.setAttribute('aria-pressed',String(options.mode===key));b.append(textElement(doc,'small',description));modes.append(b);}box.append(modes);
+ if(options.mode==='new'&&model.state.target?.kind==='new'){const label=textElement(doc,'label','歌单名称');const input=doc.createElement('input');input.dataset.key='target-name';input.type='text';input.setAttribute('aria-label','新私密歌单名称');input.value=model.state.target.name;input.maxLength=100;input.oninput=()=>{model.setTarget({kind:'new',name:input.value,privacy:10});options.changed();};label.append(input);box.append(label,textElement(doc,'p','私密 · 最终确认后才会创建歌单。'));}
+ if(options.mode==='existing'){
+  const targets=textElement(doc,'div','');targets.className='target-options';targets.setAttribute('aria-label','已有可写歌单');for(const t of model.state.targets){const b=action(doc,t.name,`target-${t.id}`,()=>{model.chooseExisting(t.id);options.changed();});b.setAttribute('aria-pressed',String(model.state.target?.kind==='existing'&&model.state.target.id===t.id));b.append(textElement(doc,'small',`${t.visibility==='private'?'私密':t.visibility==='public'?'公开':'可见性待核对'} · ID ${t.id}`));targets.append(b);}if(!model.state.targets.length)targets.append(textElement(doc,'p','暂无本人可写普通歌单，可以新建私密歌单。'));box.append(targets);
+ }return box;
 }
-
 
 export function writeReasonText(reason:string):string {
   const labels:Record<string,string>={creationUncertain:'创建结果待核对',addUncertain:'添加结果待核对',
@@ -59,40 +57,26 @@ function ruleDescription(model:PanelModel):string {
   return rules.join('；')||'未设置筛选条件';
 }
 
-export function renderWriteControls(doc:Document,controller:PanelController):HTMLElement {
-  const model=controller.model,state=model.state,box=textElement(doc,'section','');
-  box.append(textElement(doc,'h2','写入审阅与恢复'),textElement(doc,'p','真实账号小规模写入尚未验证。原收藏和目标原有内容保留。'));
-  const review=textElement(doc,'button','审阅写入清单');review.dataset.key='write-review';
-  review.disabled=controller.isBusy||!model.canPrepare();review.onclick=()=>controller.prepareWrite();box.append(review);
-  if(state.recoveryJournal){
-    const j=state.recoveryJournal;
-    const creation={notStarted:'尚未创建',pending:'已发出创建请求，等待核对',confirmed:'创建已核对',uncertain:'创建结果待核对'}[j.creationState];
-    box.append(textElement(doc,'p',`本账号保存的清单：${j.plan.songIds.length} 首；来源：我喜欢，写前重新核对内容与顺序；${j.plan.target.kind==='existing'?'目标已明确选择':creation}；目标 ${j.targetId?`ID ${j.targetId}`:'尚待核对'}。恢复后需要重新审阅和最终确认。`));
-    const recovery=textElement(doc,'button','恢复核对（只读）');recovery.dataset.key='write-recovery';
-    recovery.disabled=controller.isBusy;recovery.onclick=()=>controller.reviewRecovery();box.append(recovery);
-  }
-  if(state.recoveryCandidates.length){
-    box.append(textElement(doc,'p','以下是创建前列表之后新增的本人私密同名候选。请明确选用一个，再重新审阅和确认；不会自动选择或重复创建。'));
-    for(const candidate of state.recoveryCandidates){const choose=textElement(doc,'button',`选用 ${candidate.name} · 私密 · ID ${candidate.id}`);
-      choose.dataset.key=`recovery-${candidate.id}`;choose.disabled=controller.isBusy;choose.onclick=()=>controller.chooseRecoveryCandidate(candidate.id);box.append(choose);}
-  }
-  const plan=state.writeReview;
-  if(plan){
-    const target=plan.target.kind==='existing'?state.targets.find(t=>t.id===(plan.target as {id:string}).id):null;
-    const visibility=plan.target.kind==='new'?'私密':target?.visibility==='private'?'私密':target?.visibility==='public'?'公开':'可见性未知（写入前读回检查；保持原有可见性）';
-    box.append(textElement(doc,'h3',`最终确认 · ${plan.songIds.length} 首`),
-      textElement(doc,'p',`账号 ${plan.uid} · 来源：我喜欢，写前重新核对内容与顺序。目标：${plan.target.kind==='new'?plan.target.name:target?.name??'已有目标'} · ${visibility}${plan.target.kind==='existing'?` · ID ${plan.target.id}`:''}`),
-      textElement(doc,'p',`筛选规则：${ruleDescription(model)}。不同维度同时满足，同维度任选其一。人工移除 ${state.removed.size} 首：${[...state.removed].map(id=>state.snapshot?.songs.find(song=>song.id===id)?.name??'歌曲信息待核对').join('、')||'无'}。`));
-    const list=textElement(doc,'ol','');
-    const songs=new Map(state.snapshot?.songs.map(song=>[song.id,song]));
-    for(const id of plan.songIds){const song=songs.get(id),row=textElement(doc,'li',`${song?.name??'歌曲'} · ${(song?.artists.value??[]).map(a=>a.name).join(' / ')} · ID ${id} · ${state.added.has(id)?'人工加入':'筛选入选'}`);row.dataset.songId=id;list.append(row);}
-    box.append(list);
-    const confirm=textElement(doc,'button',plan.target.kind==='new'?'最终确认：新建私密歌单并添加清单歌曲':'最终确认：向已选歌单添加缺少的歌曲');confirm.dataset.key='write-confirm';
-    confirm.disabled=controller.isBusy||plan.selectionVersion!==state.selectionVersion;confirm.onclick=()=>controller.confirmWrite();box.append(confirm);
-    const cancel=textElement(doc,'button','取消本次确认');cancel.disabled=controller.isBusy;cancel.onclick=()=>{state.writeReview=null;state.confirmation=null;controller.changed();};box.append(cancel);
-  }
-  if(state.writeProgress){const p=state.writeProgress;const phase={creating:'正在创建私密歌单',adding:'正在添加歌曲',verifying:'正在读回核对',paused:'已暂停',complete:'核对完成',error:'检查失败'}[p.phase];box.append(textElement(doc,'p',`${phase} · 新增 ${p.added} / 已存在 ${p.alreadyPresent} / 总数 ${p.total} · 目标 ${p.targetId??'待创建'}`));}
-  if(state.writeReport){const r=state.writeReport;const status={complete:'核对完成',paused:'已暂停',uncertain:'结果待核对',error:'检查失败'}[r.status];box.append(textElement(doc,'p',`${status} · 新增 ${r.addedIds.length} · 已存在 ${r.alreadyPresentIds.length} · 待核对 ${r.unconfirmedIds.length}${r.errors.length?` · ${r.errors.map(writeReasonText).join('、')}`:''}`));
-    if(r.unconfirmedIds.length)box.append(textElement(doc,'p',`待核对 ID：${r.unconfirmedIds.join('、')}`));}
-  return box;
+export function renderWriteControls(doc:Document,controller:PanelController,options:{footer:HTMLElement;page:number;setPage:(page:number)=>void}):HTMLElement {
+ const model=controller.model,state=model.state,box=textElement(doc,'section','');box.className='write-controls';const busy=controller.isBusy;
+ if(!busy&&!state.writeReview){const review=action(doc,'审阅写入清单','write-review',()=>controller.prepareWrite(),!model.canPrepare());review.className='primary';options.footer.append(review);if(!model.canPrepare())box.append(textElement(doc,'p','明确选择目标歌单后，审阅完整清单。'));}
+ if(state.recoveryJournal){const j=state.recoveryJournal;const unresolved=j.creationState==='pending'||j.creationState==='uncertain'||j.batches.some(b=>b.state!=='confirmed');
+  const area=textElement(doc,unresolved?'section':'details','');area.className=unresolved?'recovery-notice':'recovery-history';
+  if(!unresolved)area.append(textElement(doc,'summary','已保存的写入日志'));
+  const creation={notStarted:'尚未创建',pending:'创建请求待核对',confirmed:'目标已核对',uncertain:'创建结果待核对'}[j.creationState];
+  area.append(textElement(doc,'h3',unresolved?'有一份写入清单等待核对':'已保留写入日志'),textElement(doc,'p',`${j.plan.songIds.length} 首 · ${j.plan.target.kind==='existing'?'已有目标':creation} · ${j.targetId?`目标 ID ${j.targetId}`:'不会自动重复创建'}`),action(doc,'恢复核对（只读）','write-recovery',()=>controller.reviewRecovery(),busy));box.append(area);
+ }
+ if(state.recoveryCandidates.length){box.append(textElement(doc,'p','请明确选用一个私密同名候选，再重新审阅。不会自动选择或重复创建。'));for(const candidate of state.recoveryCandidates)box.append(action(doc,`选用 ${candidate.name} · 私密 · ID ${candidate.id}`,`recovery-${candidate.id}`,()=>controller.chooseRecoveryCandidate(candidate.id),busy));}
+ const plan=state.writeReview;
+ if(plan&&!busy){const target=plan.target.kind==='existing'?state.targets.find(t=>t.id===(plan.target as {id:string}).id):null;
+  const visibility=plan.target.kind==='new'?'私密':target?.visibility==='private'?'私密':target?.visibility==='public'?'公开':'可见性待核对';
+  const summary=textElement(doc,'section','');summary.className='review-summary';summary.append(textElement(doc,'h2',`最后确认 · ${plan.songIds.length} 首`),textElement(doc,'p',`账号 ${plan.uid} · 来源：我喜欢，写前核对内容与顺序`),textElement(doc,'strong',`${plan.target.kind==='new'?plan.target.name:target?.name??'已有目标'} · ${visibility}${plan.target.kind==='existing'?` · ID ${plan.target.id}`:''}`),textElement(doc,'p',`规则：${ruleDescription(model)} · 人工加入 ${state.added.size} · 人工排除 ${state.removed.size}`));box.append(summary);
+  const page=Math.min(options.page,Math.max(0,Math.ceil(plan.songIds.length/50)-1));const list=textElement(doc,'ol','');list.className='review-list';list.start=page*50+1;const songs=new Map(state.snapshot?.songs.map(s=>[s.id,s]));
+  for(const id of plan.songIds.slice(page*50,page*50+50)){const song=songs.get(id),row=textElement(doc,'li','');row.dataset.reviewSongId=id;row.dataset.songId=id;row.append(textElement(doc,'strong',song?.name??'歌曲'),textElement(doc,'span',(song?.artists.value??[]).map(a=>a.name).join(' / ')),textElement(doc,'small',state.added.has(id)?'人工加入':'筛选入选'));list.append(row);}box.append(list);
+  const pages=Math.max(1,Math.ceil(plan.songIds.length/50)),nav=textElement(doc,'div','');nav.className='pagination';nav.append(textElement(doc,'span',`完整清单 · ${page+1} / ${pages} 页`),action(doc,'上一页','review-prev',()=>options.setPage(page-1),page===0),action(doc,'下一页','review-next',()=>options.setPage(page+1),page>=pages-1));box.append(nav);
+  const confirm=action(doc,plan.target.kind==='new'?`确认新建并添加 ${plan.songIds.length} 首`:'确认向已选歌单添加','write-confirm',()=>controller.confirmWrite(),plan.selectionVersion!==state.selectionVersion);confirm.className='primary';options.footer.append(action(doc,'取消本次审阅','cancel-review',()=>{state.writeReview=null;state.confirmation=null;controller.changed();}),confirm);
+ }
+ if(state.writeProgress&&(busy||state.writeReport?.status!=='complete')){const p=state.writeProgress;const phase={creating:'正在创建私密歌单',adding:'正在添加歌曲',verifying:'正在读回核对',paused:'已暂停',complete:'读回核对完成',error:'检查失败'}[p.phase];const area=textElement(doc,'div','');area.className='writing-status';area.append(textElement(doc,'h2',phase),textElement(doc,'strong',`${p.added+p.alreadyPresent} / ${p.total}`),textElement(doc,'p',`已新增 ${p.added} 首 · 已存在 ${p.alreadyPresent} 首`),textElement(doc,'p','可以收起继续使用网易云。暂停后，已发出的请求仍可能完成。'));if(p.phase!=='creating'){const bar=doc.createElement('progress');bar.max=Math.max(1,p.total);bar.value=p.added+p.alreadyPresent;area.append(bar);}box.append(area);}
+ if(state.writeReport&&state.writeReport.status!=='complete'){const r=state.writeReport;const area=textElement(doc,'div','');area.className='recovery-notice';area.setAttribute('role','status');area.append(textElement(doc,'h3',r.status==='uncertain'?'写入结果待核对':r.status==='paused'?'写入已暂停':'写入检查失败'),textElement(doc,'p',`新增 ${r.addedIds.length} · 已存在 ${r.alreadyPresentIds.length} · 待核对 ${r.unconfirmedIds.length}`),textElement(doc,'p',r.errors.map(writeReasonText).join('、')));box.append(area);}
+ return box;
 }

@@ -9,7 +9,7 @@ export function actionButton(doc:Document,label:string,key:string,action:()=>unk
 const phaseText:Record<string,string>={reading:'正在读取收藏',scanning:'正在扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'准备完成',error:'准备遇到问题'};
 export const duration=(ms:number)=>ms<60000?`${Math.floor(ms/1000)} 秒`:`${Math.floor(ms/60000)} 分 ${Math.floor(ms/1000)%60} 秒`;
 export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController):{update(state:WorkspaceState):void;dispose():void}{
- let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;const searches:Record<string,string>={};
+ let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;let targetMode:'new'|'existing'|null=null;let reviewPage=0;let reviewTask:string|null=null;let viewContext:string|null=null;const searches:Record<string,string>={};
  const nav=textElement(doc,'nav','');nav.className='stages';nav.setAttribute('aria-label','整理阶段');
  const body=textElement(doc,'main','');body.className='workspace-body';
  const footer=textElement(doc,'footer','');footer.className='workspace-footer';
@@ -44,7 +44,11 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
    const summary=textElement(doc,'div','');summary.className='selection-summary';summary.dataset.action='selection-summary';footer.append(summary);const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
   }
   if(state.page==='write'){
-   const heading=textElement(doc,'h2','选择一个歌单，安放这次的共鸣。');body.append(heading,textElement(doc,'p',s.message));const editing=textElement(doc,'fieldset','');editing.disabled=controller.isBusy;editing.append(renderTarget(doc,controller.model,changed));body.append(editing,renderWriteControls(doc,controller));footer.append(actionButton(doc,'返回筛选','back-filter',()=>go('filter'),controller.isBusy));if(controller.isBusy)footer.append(actionButton(doc,'暂停写入','pause-write',()=>controller.pause()));
+   if(!controller.isBusy&&!s.writeReview){body.append(textElement(doc,'h2','把这次的共鸣，放进歌单。'),textElement(doc,'p','新建一个私密空间，或继续丰富已有的收藏。'));const editing=textElement(doc,'fieldset','');editing.disabled=controller.isBusy;targetMode=s.target?.kind??targetMode;editing.append(renderTarget(doc,controller.model,{changed,mode:targetMode,setMode:mode=>{targetMode=mode;}}));body.append(editing);}
+   if(s.writeReview?.taskId!==reviewTask){reviewPage=0;reviewTask=s.writeReview?.taskId??null;}
+   const back=actionButton(doc,'返回筛选','back-filter',()=>go('filter'),controller.isBusy);footer.append(back);body.append(renderWriteControls(doc,controller,{footer,page:reviewPage,setPage:page=>{reviewPage=page;signature='';changed();}}));
+   if(controller.isBusy)footer.append(actionButton(doc,s.progress.phase==='pausing'?'正在暂停…':'暂停写入','pause-write',()=>controller.pause(),s.progress.phase==='pausing'));
+   const notice=textElement(doc,'p',s.message);notice.className='notice';body.append(notice);
   }
   if(state.page==='result'){
    const r=s.writeReport!;const box=textElement(doc,'section','');box.className='result-page';box.append(textElement(doc,'span','✓'),textElement(doc,'h2','整理完成，已读回核对。'),textElement(doc,'p',`目标歌单 ${s.targets.find(t=>t.id===r.targetId)?.name??(s.recoveryJournal?.plan.target.kind==='new'?s.recoveryJournal.plan.target.name:r.targetId)}`),textElement(doc,'strong',`实际新增 ${r.addedIds.length} 首`),textElement(doc,'p',`已存在 ${r.alreadyPresentIds.length} 首 · 清单总数 ${r.addedIds.length+r.alreadyPresentIds.length} 首`));body.append(box);
@@ -53,7 +57,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
  }
  function updateMetrics(){const metrics=body.querySelector('[data-action="scan-metrics"]');if(!metrics)return;const m=controller.scanMetrics;metrics.textContent=`本次用时 ${duration(m.elapsedMs)}  ·  ${m.ratePerMinute===null?'速度正在估算':`${Math.round(m.ratePerMinute)} 首/分钟`}  ·  ${m.remainingMs===null?'剩余时间暂不可估算':m.remainingMs===0?'准备完成':`预计剩余约 ${duration(m.remainingMs)}`}`;}
  function update(next:WorkspaceState){
-  if(disposed)return;state=next;if(state.collapsed)return;const s=controller.model.state;
+  if(disposed)return;state=next;if(viewContext!==state.contextKey){viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
   const filters=JSON.stringify(s.filters);if(lastFilters&&filters!==lastFilters){state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;}lastFilters=filters;
   const filterKey=JSON.stringify([state.contextKey,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
   const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.isBusy]);
