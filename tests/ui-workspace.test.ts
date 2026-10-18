@@ -28,6 +28,20 @@ test('uncertain and read-only recovery reports never unlock successful result',(
 import {testDocument,walk} from './fixtures/dom';
 import {mountOrganizer} from '../panel/ui/entry';
 const tick=()=>new Promise(r=>setTimeout(r,280));
+test('editable keyboard events stay inside the workspace without cancelling native editing',t=>{
+ const {doc,listeners}=testDocument(),{c}=setup();const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());
+ const host=doc.body.children[0],root=host.shadowRoot!,panel=walk(root).find(n=>n.dataset.action==='workspace')!;
+ const input=walk(root).find(n=>n.dataset.key==='source-input')!;
+ for(const type of ['keydown','keypress','keyup'])for(const key of ['Backspace','Delete',' ','a','ArrowLeft','Enter','Tab']){
+  let stopped=false,prevented=false;
+  const event={key,target:input,composedPath:()=>[input,panel,root,host],stopPropagation(){stopped=true;},preventDefault(){prevented=true;}};
+  (panel as any)[`on${type}`]?.(event);
+  assert.equal(stopped,true,`${type} ${key} must not reach host shortcuts`);assert.equal(prevented,false,'native editing must remain enabled');
+ }
+ for(const [target,key] of [[panel,'Backspace'],[input,'Escape']] as const){let stopped=false;(panel as any).onkeydown?.({key,target,composedPath:()=>[target,panel,root,host],stopPropagation(){stopped=true;}});assert.equal(stopped,false);}
+ listeners.get('keydown')!({key:'Escape',composedPath:()=>[input,panel,root,host]});assert.equal(panel.hidden,true,'workspace Escape still works');
+ app.remove();for(const type of ['keydown','keypress','keyup'])assert.equal((panel as any)[`on${type}`],null);
+});
 test('collapsed launcher remains reachable and returns focus to the workspace when reopened',t=>{
  const {doc,listeners}=testDocument(),{c}=setup();
  const app=mountOrganizer({document:doc,scope:{},controller:c});t.after(()=>app.remove());

@@ -84,6 +84,11 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const entryCopy=textElement(doc,'span','');entryCopy.className='entry-copy';
   const entryTitle=textElement(doc,'strong','歌单整理'),entryStatus=textElement(doc,'span','');entryStatus.className='entry-status';entryCopy.append(entryTitle,entryStatus);entry.append(entryIcon,entryCopy);
   const panel=textElement(doc,'section','');panel.className='panel';panel.dataset.action='workspace';panel.setAttribute('role','region');panel.setAttribute('aria-label','歌单整理工作区');panel.tabIndex=-1;
+  // The host's document hotkeys see the shadow host instead of the input and
+  // cancel Backspace/Space. Stop bubbling after local controls handle the key;
+  // leave browser editing, selection, IME and workspace Escape behavior intact.
+  const onEditorKey=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!event.isComposing)return;const target=event.target as HTMLElement|null;if(target&&(['INPUT','TEXTAREA','SELECT'].includes(target.tagName.toUpperCase())||target.isContentEditable))event.stopPropagation();};
+  panel.onkeydown=onEditorKey;panel.onkeypress=onEditorKey;panel.onkeyup=onEditorKey;
   const header=textElement(doc,'header','');header.className='workspace-header';const brand=textElement(doc,'div','');brand.append(textElement(doc,'small','PLAYLIST ORGANIZER'),textElement(doc,'h1','歌单整理'));
   const controls=textElement(doc,'div','');controls.className='header-actions';
   const menu=textElement(doc,'div','');menu.className='more-menu';menu.hidden=true;
@@ -107,7 +112,7 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const onVisibility=()=>{if(doc.visibilityState==='visible')void controller.checkAccount();};
   const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();if(state.collapsed)entry.focus();};
   const onUnload=()=>instance.remove();doc.defaultView?.addEventListener('beforeunload',onUnload);doc.addEventListener('visibilitychange',onVisibility);doc.addEventListener('keydown',onKey);
-  const instance:OrganizerInstance={show(){if(removed)return;if(state.collapsed)applyAmbientTheme(host,resolveAmbientTheme(doc));state.collapsed=false;render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);clearInterval(metricsTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);if(toastTimer!==undefined)clearTimeout(toastTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);view.dispose();entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
+  const instance:OrganizerInstance={show(){if(removed)return;if(state.collapsed)applyAmbientTheme(host,resolveAmbientTheme(doc));state.collapsed=false;render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);clearInterval(metricsTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);if(toastTimer!==undefined)clearTimeout(toastTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);view.dispose();panel.onkeydown=null;panel.onkeypress=null;panel.onkeyup=null;entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
   scope.__ncmOrganizerV1=instance;render();if(!options.controller)void controller.initialize();return instance;
 }
 if(typeof window!=='undefined'&&typeof document!=='undefined')mountOrganizer();

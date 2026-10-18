@@ -8,6 +8,20 @@ import {ReadError} from '../../panel/client/requests';
 import {snapshot,memoryStorage} from './read';
 import {makeSong} from './synthetic';
 const params=new URLSearchParams(location.search),scenario=params.get('scenario')??'welcome';
+// Reproduce Mac 3.1.1's document hotkeys: the retargeted shadow host is not an
+// input, so the first Backspace is cancelled; duplicate keydowns are ignored.
+if(params.has('host-hotkeys')){
+ let previous='';
+ const hotkey=(event:KeyboardEvent)=>{
+  const signature=[event.type,event.keyCode,event.shiftKey,event.ctrlKey,event.altKey,event.metaKey].join(',');
+  if(signature===previous)return;previous=signature;if(event.type!=='keydown')return;
+  const target=event.target as HTMLInputElement,tag=target.tagName?.toLowerCase();
+  const editing=tag==='textarea'||tag==='input'&&['text','password','email','number','search','tel','url'].includes(target.type);
+  if(!editing&&event.key==='Backspace')event.preventDefault();
+  if(!editing&&event.key===' '){event.preventDefault();document.getElementById('preview-state')!.textContent='宿主空格快捷键被触发';}
+ };
+ document.addEventListener('keydown',hotkey);document.addEventListener('keyup',hotkey);
+}
 const colors:Record<string,string>={brown:'#71473e',green:'#506d3a',teal:'#356959',fallback:'#15151b'};
 document.body.style.backgroundColor=colors[params.get('theme')??'brown']??colors.brown;
 window.__ncmOrganizerV1?.remove();
