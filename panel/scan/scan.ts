@@ -1,12 +1,12 @@
-import type { LibrarySnapshot, Progress, SongRecord, CacheEntry, PersistedState } from '../core/model';
-import { createLibraryReader, validateSnapshot } from '../client/library';
+import type { LibrarySnapshot, Progress, SongRecord, CacheEntry, StoredPlaylistScan } from '../core/model';
+import { createLibraryReader, validateSnapshot,id } from '../client/library';
 import { readMetadata, resetMetadataErrors, MetadataReadError, MetadataPausedError } from '../client/metadata';
 import { ReadError } from '../client/requests';
 import { LocalStore } from './store';
 
 type Metadata = Pick<SongRecord, 'genres' | 'bpm' | 'language'>;
 export type ScanOptions = {
-  readLibrary: () => Promise<LibrarySnapshot>;
+  readLibrary: (sourceId:string,signal?:AbortSignal) => Promise<LibrarySnapshot>;
   readUid: () => Promise<string>;
   readMetadata: (id: string, signal?: AbortSignal) => Promise<Metadata>;
   store: LocalStore;
@@ -29,33 +29,62 @@ export class CollectionChangedError extends ReadError {
   }
 }
 
-export type ScanPublication = { generation: number; result: LibrarySnapshot | null };
+export type ScanPublication = { generation: number; result: LibrarySnapshot | null; change?:{addedIds:string[];removedIds:string[];reordered:boolean} };
+type Memory = {cache:Record<string,CacheEntry>;last:StoredPlaylistScan|null;force:boolean;volatile:boolean;dirty:boolean};
 
 export class Scanner {
   status: Progress & { persisted: boolean } = { phase: 'paused', processed: 0, total: 0, persisted: false };
   result: LibrarySnapshot | null = null;
   private sequence = 0;
   get generation(): number { return this.sequence; }
-  private force = false;
-  private volatile = false;
+  private forceNext = false;
   private running = false;
-  private memoryCache: Record<string, CacheEntry> | undefined;
-  private memoryUid: string | undefined;
+  private memories=new Map<string,Memory>();
+  private activeKey:string|undefined;
 
   constructor(private readonly options: ScanOptions) {}
 
   forceRefresh(): void {
-    this.force = true;
+    this.forceNext = true;
     this.options.resetMetadataErrors?.();
   }
 
-  continueWithoutPersistence(): void {
-    if (this.status.phase !== 'paused') throw new ReadError('paused');
-    this.volatile = true;
+  continueWithoutPersistence(uid?:string,pid?:string): void {
+    if(this.running||(!uid&&this.status.phase!=='paused'))throw new ReadError('paused');
+    if((uid===undefined)!==(pid===undefined))throw new ReadError('structure');
+    const key=uid!==undefined&&pid!==undefined?id(uid)+':'+id(pid):this.activeKey;
+    if(!key)throw new ReadError('paused');
+    const memory=this.memories.get(key)??{cache:{},last:null,force:false,volatile:false,dirty:false};
+    this.memories.set(key,memory);
+    if(key!==this.activeKey){this.result=null;this.status={phase:'paused',processed:0,total:0,persisted:false};}
+    this.activeKey=key;
+    memory.volatile = true;
     this.status.persisted = false;
   }
 
-  retryPersistence(): void { this.volatile = false; }
+  retryPersistence(uid?:string,pid?:string): void { const key=uid!==undefined&&pid!==undefined?id(uid)+':'+id(pid):this.activeKey;const memory=key?this.memories.get(key):undefined;if(memory)memory.volatile=false; }
+
+  discardCaches(uid:string,scope:{kind:'all'}|{kind:'exceptFavorites';favoritesId:string}):void {
+    if(this.running)throw new ReadError('paused');
+    for(const [key,m] of this.memories){if(key.startsWith(uid+':')&&(scope.kind==='all'||key!==uid+':'+scope.favoritesId)){this.memories.delete(key);if(this.activeKey===key){this.activeKey=undefined;this.result=null;this.status={phase:'paused',processed:0,total:0,persisted:false};}}}
+    this.forceNext=false;
+  }
+
+  hasUnsavedResult(uid:string,pid:string):boolean {
+    const memory=this.memories.get(id(uid)+':'+id(pid));return !!(memory?.last&&memory.dirty);
+  }
+
+  async persistCurrent(uid?:string,pid?:string):Promise<void> {
+    const key=uid!==undefined&&pid!==undefined?id(uid)+':'+id(pid):this.activeKey;
+    const memory=key?this.memories.get(key):undefined,record=memory?.last;
+    if(this.running||!record)throw new ReadError('paused');
+    const generation=this.sequence;
+    if(await this.options.readUid()!==record.uid){this.result=null;throw new ReadError('accountChanged');}
+    if(this.running||generation!==this.sequence)throw new ReadError('paused');
+    const saved=record.checkpoint.phase==='complete'?{...record,lastCompletedAt:(this.options.now??Date.now)()}:record;
+    this.options.store.saveScan(record.uid,record.source.id,saved);
+    memory!.last=saved;memory!.volatile=false;memory!.dirty=false;if(key===this.activeKey)this.status.persisted=true;
+  }
 
   async scan(input: LibrarySnapshot, signal: AbortSignal, onProgress: (p: Progress, publication: ScanPublication) => void): Promise<LibrarySnapshot> {
     if (this.running) throw new ReadError('paused');
@@ -65,16 +94,22 @@ export class Scanner {
     let validated = false;
     let identityFailure: ReadError | undefined;
     let failure: unknown, stopped = false, processed = 0, issued = 0;
-    let state: PersistedState | null = null;
+    let state: StoredPlaylistScan | null = null;
     let cache: Record<string, CacheEntry> = {};
     const completed = new Set<string>();
     let snapshot = input;
     const now = this.options.now ?? Date.now;
+    const key=input.uid+':'+input.sourcePlaylistId;
+    const memory=this.memories.get(key)??{cache:{},last:null,force:false,volatile:false,dirty:false};
+    this.memories.set(key,memory);this.activeKey=key;
+    if(this.forceNext){memory.force=true;this.forceNext=false;}
+    let change:ScanPublication['change'];
 
     const publish = (phase: Progress['phase']) => {
       if (identityFailure) return;
       this.status = { phase, processed, total: snapshot.ids.length, persisted: this.status.persisted };
-      onProgress({ phase, processed, total: snapshot.ids.length }, { generation, result: this.result });
+      onProgress({ phase, processed, total: snapshot.ids.length }, { generation, result: this.result,...(change?{change}: {}) });
+      change=undefined;
     };
     // Identity validation remains an independent fresh read even at a pause checkpoint.
     // It must verify account ownership before publishing/persisting issued request results.
@@ -92,22 +127,27 @@ export class Scanner {
         throw error;
       }
     };
+    const remember = (phase:Progress['phase']):StoredPlaylistScan => {
+      if(!snapshot.source)throw new ReadError('structure');
+      const next:StoredPlaylistScan={schemaVersion:2,uid:input.uid,source:snapshot.source,
+        checkpoint:{snapshot,completedIds:[...completed],cache,phase,updatedAt:now()},
+        lastCompletedAt:state?.lastCompletedAt??memory.last?.lastCompletedAt??null};
+      memory.last=next;memory.cache=cache;memory.dirty=true;
+      return next;
+    };
     const save = async (phase: Progress['phase']) => {
-      if (this.volatile) {
+      const next=remember(phase);
+      if (memory.volatile) {
         this.status.persisted = false;
         return;
       }
       await guard();
-      // Reload only the journal so a newer writer checkpoint cannot be overwritten by a scan.
-      const latest = this.options.store.loadWriteJournal(input.uid);
-      const next: PersistedState = {
-        schemaVersion: 1, uid: input.uid,
-        scan: { snapshot, completedIds: [...completed], cache, phase, updatedAt: now() },
-        writeJournal: latest ? latest.writeJournal : state?.writeJournal ?? null,
-      };
       try {
-        this.options.store.save(input.uid, next);
-        state = next;
+        const saved=phase==='complete'?{...next,lastCompletedAt:now()}:next;
+        this.options.store.saveScan(input.uid,input.sourcePlaylistId,saved);
+        memory.last=saved;
+        memory.dirty=false;
+        state = saved;
         this.status.persisted = true;
       } catch (error) {
         this.status.persisted = false;
@@ -119,21 +159,21 @@ export class Scanner {
       validateSnapshot(input);
       this.status.persisted = false;
       publish('reading');
-      const fresh = await this.options.readLibrary();
+      const fresh = await this.options.readLibrary(input.sourcePlaylistId,signal);
       validateSnapshot(fresh);
       await guard();
       if (fresh.uid !== input.uid) throw new ReadError('accountChanged');
-      if (fresh.sourcePlaylistId !== input.sourcePlaylistId || fresh.revision !== input.revision) {
-        throw new CollectionChangedError(fresh, input);
-      }
+      if (fresh.sourcePlaylistId !== input.sourcePlaylistId)throw new ReadError('structure');
+      if(fresh.revision!==input.revision){const delta=new CollectionChangedError(fresh,input);change={addedIds:delta.addedIds,removedIds:delta.removedIds,reordered:delta.reordered};}
+      if(!fresh.source)throw new ReadError('structure');
       snapshot = { ...fresh, songs: fresh.songs.map(song => ({ ...song })) };
       validated = true;
       this.result = snapshot;
-      state = this.options.store.load(input.uid);
-      cache = { ...state?.scan?.cache };
-      if (this.memoryCache && this.memoryUid === input.uid) cache = { ...cache, ...this.memoryCache };
+      state = this.options.store.loadScan(input.uid,input.sourcePlaylistId);
+      const allowed=new Set(snapshot.ids);
+      cache = Object.fromEntries(Object.entries({...state?.checkpoint.cache,...memory.cache}).filter(([id])=>allowed.has(id)));
 
-      const prior = state?.scan;
+      const prior = memory.last?.checkpoint??state?.checkpoint;
       if (prior?.snapshot.revision === snapshot.revision && prior.snapshot.sourcePlaylistId === snapshot.sourcePlaylistId) {
         const priorCompleted = new Set(prior.completedIds);
         // Partial pause results stay visible while their sources are rechecked on resume.
@@ -149,7 +189,7 @@ export class Scanner {
       }
       for (const song of snapshot.songs) {
         const entry = cache[song.id];
-        if (this.force || !entry) continue;
+        if (memory.force || !entry) continue;
         let all = true;
         for (const field of ['genres', 'bpm', 'language'] as const) {
           const value = entry.song[field];
@@ -187,8 +227,7 @@ export class Scanner {
                 if (metadata[field].status === 'error') updatedAt[field] = 0;
               }
               cache[song.id] = { song: { ...song }, updatedAt };
-              this.memoryCache = cache;
-              this.memoryUid = input.uid;
+              memory.cache=cache;memory.dirty=true;
               publish(stopped || signal.aborted ? 'pausing' : 'scanning');
               if (processed % 10 === 0 && !stopped) await save('scanning');
             } catch (cause) {
@@ -225,7 +264,7 @@ export class Scanner {
       const phase = stopped || signal.aborted ? 'paused' : 'complete';
       await save(phase);
       publish(phase);
-      if (phase === 'complete') this.force = false;
+      if (phase === 'complete') memory.force = false;
       return snapshot;
     } catch (error) {
       const identityLost = error instanceof ReadError && ['login', 'accountChanged'].includes(error.kind);
@@ -234,6 +273,7 @@ export class Scanner {
       // Let the controller revoke account-owned state before its next publication.
       if (identityLost) this.status = { phase: 'paused', processed, total: snapshot.ids.length, persisted: false };
       else publish('paused');
+      if(validated&&!identityLost)remember('paused');
       if (validated && error instanceof ReadError && !['login', 'accountChanged', 'storage', 'collectionChanged'].includes(error.kind)) {
         try { await save('paused'); }
         catch { this.status.persisted = false; }
@@ -257,7 +297,7 @@ let defaultScanner: Scanner | undefined;
 export function scan(snapshot: LibrarySnapshot, signal: AbortSignal, onProgress: (p: Progress) => void): Promise<LibrarySnapshot> {
   if (!defaultScanner) {
     const library = createLibraryReader();
-    defaultScanner = createScanner({ ...library, readMetadata, resetMetadataErrors, store: new LocalStore() });
+    defaultScanner = createScanner({readLibrary:(id,signal)=>library.readLibrary({kind:'playlist',id},signal),readUid:library.readUid, readMetadata, resetMetadataErrors, store: new LocalStore() });
   }
   return defaultScanner.scan(snapshot, signal, onProgress);
 }

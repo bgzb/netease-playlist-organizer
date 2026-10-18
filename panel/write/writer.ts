@@ -24,7 +24,7 @@ function validatePlan(plan:WritePlan):void {
     || !plan.target.name.trim() || plan.target.name.length>100) throw new ReadError('permission');
 }
 function confirmed(plan:WritePlan,confirmation:WriteConfirmation|null):boolean {
-  return !!confirmation && confirmation.uid===plan.uid && confirmation.sourceRevision===plan.sourceRevision
+  return !!confirmation && confirmation.uid===plan.uid && confirmation.sourcePlaylistId===plan.sourcePlaylistId && confirmation.sourceRevision===plan.sourceRevision
     && confirmation.selectionVersion===plan.selectionVersion && confirmation.targetKey===JSON.stringify(plan.target)
     && Number.isFinite(confirmation.confirmedAt) && confirmation.confirmedAt>0;
 }
@@ -32,7 +32,7 @@ export function createWriter(deps:WriterDependencies) {
   let running=false;
   const save=(journal:WriteJournal)=>saveJournal(deps.store,journal,deps.now);
   function load(plan:WritePlan):WriteJournal {
-    const previous=deps.store.load(plan.uid)?.writeJournal;
+    const previous=deps.store.loadWriteJournal(plan.uid)?.writeJournal;
     if(previous?.plan.taskId===plan.taskId) {
       if(JSON.stringify(previous.plan)!==JSON.stringify(plan))throw new ReadError('permission');
       return previous;
@@ -59,9 +59,10 @@ export function createWriter(deps:WriterDependencies) {
   }
   async function playlist(j:WriteJournal,pid:string,signal:AbortSignal,source=false):Promise<{raw:Record<string,unknown>;ids:string[]}> {
     const response=await read(j,'/api/v6/playlist/detail',{id:pid,n:100000,s:0},signal),p=response.playlist;
-    if(!object(p)||id(p.id)!==pid||!object(p.creator)||id(p.creator.userId)!==j.plan.uid
-      || (source?p.specialType!==5:p.specialType!==0||p.subscribed===true)
+    if(!object(p)||id(p.id)!==pid||!object(p.creator)
+      || (!source&&(id(p.creator.userId)!==j.plan.uid||p.specialType!==0||p.subscribed===true))
       || !Array.isArray(p.trackIds)||!Number.isSafeInteger(p.trackCount))throw new ReadError('permission');
+    id(p.creator.userId);
     const ids=p.trackIds.map(value=>{if(!object(value))throw new ReadError('structure');return id(value.id);});
     if(ids.length!==p.trackCount||new Set(ids).size!==ids.length)throw new ReadError('structure');
     return {raw:p,ids};

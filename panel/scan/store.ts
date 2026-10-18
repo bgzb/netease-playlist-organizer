@@ -1,7 +1,8 @@
-import type {PersistedState,SongRecord,Field,Source,LibrarySnapshot,WriteJournal,WritePlan,ScanCheckpoint,CacheEntry} from '../core/model';
+import type {PersistedState,SongRecord,Field,Source,LibrarySnapshot,WriteJournal,WritePlan,ScanCheckpoint,CacheEntry,PlaylistDescriptor,StoredPlaylistScan,ScanSummary} from '../core/model';
 import {id,validateSnapshot} from '../client/library';import {object,ReadError} from '../client/requests';
 export type StorageLike=Pick<Storage,'length'|'key'|'getItem'|'setItem'|'removeItem'>;
 const PREFIX='ncm-organizer:v1:';
+const SCANS='ncm-organizer:v2:';
 function obj(v:unknown):Record<string,unknown>{if(!object(v))throw new ReadError('structure');return v;}
 function str(v:unknown):string{if(typeof v!=='string')throw new ReadError('structure');return v;}
 function number(v:unknown):number{if(typeof v!=='number'||!Number.isFinite(v)||v<0)throw new ReadError('structure');return v;}
@@ -11,7 +12,8 @@ function one<T extends string>(v:unknown,choices:readonly T[]):T{if(typeof v!=='
 function ids(v:unknown):string[]{const a=list(v,id);if(new Set(a).size!==a.length)throw new ReadError('structure');return a;}
 function field<T>(v:unknown,read:(v:unknown)=>T):Field<T>{const o=obj(v);const status=one(o.status,['known','missing','error']);const source=one<Source>(o.source,['songDetail','desktopWiki','ugcSong','manual','none']);const value=status==='known'?read(o.value):null;if(status!=='known'&&o.value!==null)throw new ReadError('structure');return {value,status,source,...(o.reason===undefined?{}:{reason:str(o.reason)})};}
 function song(v:unknown):SongRecord {const o=obj(v);return {id:id(o.id),name:str(o.name),position:integer(o.position),artists:field(o.artists,v=>list(v,a=>{const o=obj(a);return {id:id(o.id),name:str(o.name)};})),genres:field(o.genres,v=>list(v,str)),bpm:field(o.bpm,v=>{const n=number(v);if(n<=0)throw new ReadError('structure');return n;}),language:field(o.language,str)};}
-function snapshot(v:unknown,uid:string):LibrarySnapshot {const o=obj(v);const result={uid:id(o.uid),sourcePlaylistId:id(o.sourcePlaylistId),declaredCount:integer(o.declaredCount),ids:ids(o.ids),songs:list(o.songs,song),revision:str(o.revision)};if(result.uid!==uid)throw new ReadError('accountChanged');validateSnapshot(result);return result;}
+function descriptor(v:unknown):PlaylistDescriptor {const o=obj(v);return {id:id(o.id),name:str(o.name),creatorUid:id(o.creatorUid)};}
+function snapshot(v:unknown,uid:string):LibrarySnapshot {const o=obj(v);const result={uid:id(o.uid),sourcePlaylistId:id(o.sourcePlaylistId),...(o.source===undefined?{}:{source:descriptor(o.source)}),declaredCount:integer(o.declaredCount),ids:ids(o.ids),songs:list(o.songs,song),revision:str(o.revision)};if(result.uid!==uid)throw new ReadError('accountChanged');validateSnapshot(result);return result;}
 function target(v:unknown):WritePlan['target'] {const o=obj(v);if(o.kind==='existing')return {kind:'existing',id:id(o.id)};if(o.kind==='new'&&o.privacy===10)return {kind:'new',name:str(o.name),privacy:10};throw new ReadError('structure');}
 function review(v:unknown):NonNullable<WriteJournal['review']> {
   const o=obj(v),f=obj(o.filters);
@@ -36,11 +38,92 @@ function sanitize(value:unknown,uid:string):PersistedState {
   const o=obj(value);if(o.schemaVersion!==1||id(o.uid)!==uid)throw new ReadError('accountChanged');
   return {schemaVersion:1,uid,scan:checkpoint(o.scan,uid),writeJournal:journal(o.writeJournal,uid)};
 }
+function storedScan(value:unknown,uid:string,pid:string):StoredPlaylistScan {
+  const o=obj(value),source=descriptor(o.source),scan=checkpoint(o.checkpoint,uid);
+  if(o.schemaVersion!==2||id(o.uid)!==uid||source.id!==pid||!scan||scan.snapshot.sourcePlaylistId!==pid)throw new ReadError('structure');
+  if(scan.phase==='complete'&&scan.completedIds.length!==scan.snapshot.ids.length)throw new ReadError('structure');
+  const nested=scan.snapshot.source;
+  if(nested&&(nested.id!==source.id||nested.name!==source.name||nested.creatorUid!==source.creatorUid))throw new ReadError('structure');
+  const allowed=new Set(scan.snapshot.ids);
+  if(Object.keys(scan.cache).some(key=>!allowed.has(key)))throw new ReadError('structure');
+  return {schemaVersion:2,uid,source,checkpoint:scan,lastCompletedAt:o.lastCompletedAt===null?null:number(o.lastCompletedAt)};
+}
 export class LocalStore {
   // Cache only the last successfully stored bytes and an encoded, detached journal.
   // A different account, external writer, deletion or corrupt value invalidates the hit.
   private savedJournal: {account:string;raw:string;encoded:string}|undefined;
   constructor(private readonly storage:StorageLike=globalThis.localStorage){}
+  private scanKey(uid:string,pid:string):string{return SCANS+id(uid)+':scan:'+id(pid);}
+  private envelope(uid:string):Record<string,unknown>|null {
+    const account=id(uid),raw=this.storage.getItem(PREFIX+account);
+    if(raw===null)return null;
+    const o=obj(JSON.parse(raw));
+    if(o.schemaVersion!==1||id(o.uid)!==account)throw new ReadError('structure');
+    // A damaged scan must not destroy a recoverable journal (or vice versa).
+    journal(o.writeJournal,account);
+    return o;
+  }
+  private writeEnvelope(uid:string,value:Record<string,unknown>):void {
+    try{this.storage.setItem(PREFIX+id(uid),JSON.stringify(value));this.savedJournal=undefined;}
+    catch{throw new ReadError('storage');}
+  }
+  loadScan(uid:string,pid:string):StoredPlaylistScan|null {
+    try{const account=id(uid),source=id(pid),raw=this.storage.getItem(this.scanKey(account,source));return raw===null?null:storedScan(JSON.parse(raw),account,source);}
+    catch(error){if(error instanceof ReadError)throw error;throw new ReadError('structure');}
+  }
+  saveScan(uid:string,pid:string,value:StoredPlaylistScan):void {
+    const safe=storedScan(value,id(uid),id(pid));
+    try{this.storage.setItem(this.scanKey(uid,pid),JSON.stringify(safe));}catch{throw new ReadError('storage');}
+  }
+  listScans(uid:string):{items:ScanSummary[];invalidCount:number} {
+    const prefix=SCANS+id(uid)+':scan:',items:ScanSummary[]=[];let invalidCount=0;
+    for(let i=0;i<this.storage.length;i++){
+      const key=this.storage.key(i);if(!key?.startsWith(prefix))continue;
+      try{
+        const pid=key.slice(prefix.length);if(id(pid)!==pid)throw new ReadError('structure');
+        const value=this.loadScan(uid,pid);if(!value)continue;
+        const c=value.checkpoint;items.push({source:value.source,phase:c.phase,processed:c.completedIds.length,total:c.snapshot.ids.length,updatedAt:c.updatedAt,lastCompletedAt:value.lastCompletedAt});
+      }catch{invalidCount++;}
+    }
+    return {items:items.sort((a,b)=>b.updatedAt-a.updatedAt),invalidCount};
+  }
+  saveWriteJournal(uid:string,value:WriteJournal|null):void {
+    const account=id(uid),latest=this.envelope(account);
+    this.writeEnvelope(account,{schemaVersion:1,uid:account,scan:latest?.scan??null,writeJournal:journal(value,account)});
+  }
+  migrateLegacyScan(uid:string,verifiedFavoritesId:string):'none'|'migrated'|'alreadyPresent' {
+    const account=id(uid),pid=id(verifiedFavoritesId),legacy=this.envelope(account);
+    if(!legacy||legacy.scan===null)return 'none';
+    const scan=checkpoint(legacy.scan,account);
+    if(!scan||scan.snapshot.sourcePlaylistId!==pid)throw new ReadError('structure');
+    const prior=this.loadScan(account,pid);
+    if(!prior){
+      const source:PlaylistDescriptor={id:pid,name:scan.snapshot.source?.name??'我喜欢',creatorUid:account};
+      const allowed=new Set(scan.snapshot.ids);
+      const cache=Object.fromEntries(Object.entries(scan.cache).filter(([key])=>allowed.has(key)));
+      const next=storedScan({schemaVersion:2,uid:account,source,checkpoint:{...scan,cache,snapshot:{...scan.snapshot,source}},lastCompletedAt:scan.phase==='complete'?scan.updatedAt:null},account,pid);
+      this.saveScan(account,pid,next);
+      const saved=this.loadScan(account,pid);
+      if(!saved||JSON.stringify(saved)!==JSON.stringify(next))throw new ReadError('storage');
+    }
+    const latest=this.envelope(account);
+    // Do not clear a newer legacy scan written while storage was being read back.
+    if(!latest||JSON.stringify(latest.scan)!==JSON.stringify(legacy.scan))throw new ReadError('storage');
+    this.writeEnvelope(account,{schemaVersion:1,uid:account,scan:null,writeJournal:journal(latest.writeJournal,account)});
+    return prior?'alreadyPresent':'migrated';
+  }
+  clearScans(uid:string,scope:{kind:'all'}|{kind:'exceptFavorites';favoritesId:string}):void {
+    const account=id(uid),keep=scope.kind==='exceptFavorites'?id(scope.favoritesId):null;
+    const legacy=this.envelope(account); // Validate the journal before any mutation.
+    if(legacy&&legacy.scan!==null){
+      let retain=false;
+      if(keep){const s=checkpoint(legacy.scan,account);if(!s)throw new ReadError('structure');retain=s.snapshot.sourcePlaylistId===keep;}
+      if(!retain)this.writeEnvelope(account,{schemaVersion:1,uid:account,scan:null,writeJournal:journal(legacy.writeJournal,account)});
+    }
+    const prefix=SCANS+account+':scan:',keys:string[]=[];
+    for(let i=0;i<this.storage.length;i++){const key=this.storage.key(i);if(key?.startsWith(prefix)&&(!keep||key!==prefix+keep))keys.push(key);}
+    try{for(const key of keys)this.storage.removeItem(key);}catch{throw new ReadError('storage');}
+  }
   load(uid:string):PersistedState|null {try{const account=id(uid);const raw=this.storage.getItem(PREFIX+account);return raw===null?null:sanitize(JSON.parse(raw),account);}catch{return null;}}
   // Scan checkpoints need the latest writer journal, not a restored song/cache copy.
   // Always re-read storage; validate the envelope and journal independently of scan data.

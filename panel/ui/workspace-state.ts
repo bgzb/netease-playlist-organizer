@@ -8,6 +8,7 @@ export function canEnterPage(page:WorkspacePage,c:PanelController):boolean{
  if(page==='prepare')return !c.isWriting&&!(c.isBusy&&c.operationKind==='write');
  if(page==='result')return !!s.writeReport&&s.writeReport.status==='complete'&&s.writeReport.unconfirmedIds.length===0&&s.writeReport.errors.length===0&&!c.isBusy;
  if(page==='write'&&(c.isWriting||c.isBusy&&c.operationKind==='write'))return !!s.snapshot;
+ if(c.isBusy&&c.operationKind==='source'&&s.snapshot&&s.progress.phase==='complete')return page==='filter'||page==='write';
  if(c.isBusy||!s.snapshot||s.progress.phase!=='complete')return false;
  if(page==='filter')return true;
  const p=c.model.preview();return p.ids.length>0&&!p.error;

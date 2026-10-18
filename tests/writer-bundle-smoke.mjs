@@ -16,12 +16,13 @@ class Element {
 const body=new Element('body');const listeners=new Map();
 const document={body,documentElement:body,createElement:tag=>new Element(tag),createTextNode:text=>{const e=new Element('#text');e.textContent=text;return e;},location:{href:'orpheus://orpheus/app.html'},querySelector:()=>null,addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:k=>listeners.delete(k)};
 const storage=new Map();const localStorage={get length(){return storage.size;},key:i=>[...storage.keys()][i]??null,getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
-const calls=[],writes=[],targetTracks=new Set(),playlists=[{id:8,name:'喜欢',specialType:5,creator:{userId:7},privacy:10},{id:9,name:'合成已有目标',specialType:0,creator:{userId:7},privacy:0,subscribed:false}];const ids=[1,2,3];const detail=id=>({id,name:id===1?'<img onerror=alert(1)>':'合成曲目',ar:[{id:id===2?0:11,name:'<svg onload=alert(2)>'}]});
+const calls=[],writes=[],targetTracks=new Set(),playlists=[{id:8,name:'喜欢',specialType:5,creator:{userId:7},privacy:10},{id:9,name:'合成已有目标',specialType:0,creator:{userId:7},privacy:0,subscribed:false},{id:20,name:'他人来源',specialType:0,creator:{userId:99},privacy:0,subscribed:true}];const ids=[1,2,3];const detail=id=>({id,name:id===1?'<img onerror=alert(1)>':'合成曲目',ar:[{id:id===2?0:11,name:'<svg onload=alert(2)>'}]});
 const apiFactory=path=>async data=>{
   calls.push(path);switch(path){
     case '/api/w/nuser/account/get':return {code:200,profile:{userId:7}};
     case '/api/user/playlist':return {code:200,more:false,playlist:playlists};
-    case '/api/v6/playlist/detail': {const pid=String(data.id),p=playlists.find(p=>String(p.id)===pid),tracks=pid==='8'?ids:[...targetTracks];return {code:200,playlist:{...p,trackCount:tracks.length,trackIds:tracks.map(id=>({id})),tracks:pid==='8'?ids.map(detail):[]}};}
+    case '/api/v6/playlist/detail': {const pid=String(data.id),p=playlists.find(p=>String(p.id)===pid),tracks=pid==='8'?ids:pid==='20'?[1,4]:[...targetTracks];return {code:200,playlist:{...p,trackCount:tracks.length,trackIds:tracks.map(id=>({id})),tracks:['8','20'].includes(pid)?tracks.map(detail):[]}};}
+    case '/api/v3/song/detail':return {code:200,songs:JSON.parse(data.c).map(x=>detail(Number(x.id)))};
     case '/api/playlist/create':writes.push({path,data});playlists.push({id:10,name:data.name,specialType:0,creator:{userId:7},privacy:10,subscribed:false});return {code:200,playlist:{id:10}};
     case '/api/playlist/manipulate/tracks':writes.push({path,data});JSON.parse(data.trackIds).forEach(id=>targetTracks.add(id));return {code:200};
     case '/api/rep/ugc/song/get':return {code:200,data:{language:'国语'}};
@@ -33,12 +34,13 @@ const openedPaths=[],navigationHistory={location:{pathname:'/'},push(path){this.
 factories[12]=function(){const marker='dva-tool getHistory getDispatch';return marker;};
 const req=Object.assign(id=>{throw Error('unexpected uncached '+id);},{m:factories,c:{3:{exports:{request:apiFactory}},7:{exports:{wiki}},12:{exports:{a:{inited:true,history:navigationHistory}}}}});
 const intervals=new Set();let intervalID=0;
-const context=vm.createContext({document,localStorage,webpackJsonp:{push(entry){for(const factory of Object.values(entry[1]))factory({}, {}, req);}},AbortController,performance,setTimeout,clearTimeout,setInterval(){const id=++intervalID;intervals.add(id);return id;},clearInterval:id=>intervals.delete(id)});context.window=context;
+const context=vm.createContext({document,localStorage,webpackJsonp:{push(entry){for(const factory of Object.values(entry[1]))factory({}, {}, req);}},URL,URLSearchParams,AbortController,performance,setTimeout,clearTimeout,setInterval(){const id=++intervalID;intervals.add(id);return id;},clearInterval:id=>intervals.delete(id)});context.window=context;
 const bundle=fs.readFileSync(process.argv[2]??'work/dist/panel.js','utf8');
 const run=()=>vm.runInContext(bundle,context);const walk=node=>[node,...node.children.flatMap(walk)];
 const button=label=>{const found=walk(body.children[0].shadowRoot).find(e=>e.tagName==='button'&&e.textContent===label);assert.ok(found,'button '+label);assert.equal(found.disabled,false);return found;};
 const action=key=>{const found=walk(body.children[0].shadowRoot).find(e=>e.tagName==='button'&&e.dataset.key===key);assert.ok(found,'action '+key);assert.equal(found.disabled,false);return found;};
 run();assert.equal(context.__ncmOrganizerV1.status().readReady,true);const instance=context.__ncmOrganizerV1;run();assert.equal(context.__ncmOrganizerV1,instance);assert.equal(body.children.length,1);
+await new Promise(r=>setTimeout(r,280));assert.ok(walk(body.children[0].shadowRoot).some(e=>e.dataset.key==='source-select'),'v1 workspace exposes source selection');
 action('prepare').onclick();for(let tick=0;tick<120&&instance.status().scan?.phase!=='complete';tick++)await new Promise(r=>setTimeout(r,30));await new Promise(r=>setTimeout(r,280));assert.equal(instance.status().scan.phase,'complete');assert.equal(instance.status().scan.processed,3);assert.equal(instance.status().scan.coverage.artists,2/3);
 const all=walk(body.children[0].shadowRoot).filter(e=>e.dataset.key==='all-songs')[0];all.checked=true;all.onchange();
 const rows=walk(body.children[0].shadowRoot);assert.equal(rows.some(e=>['img','svg'].includes(e.tagName)),false);assert.match(body.children[0].shadowRoot.textContent,/<img onerror=alert\(1\)>/);assert.match(body.children[0].shadowRoot.textContent,/<svg onload=alert\(2\)>/);
@@ -52,6 +54,17 @@ action('back-filter').onclick();action('to-write').onclick();button('恢复核�
 button('审阅写入清单').onclick();await new Promise(r=>setTimeout(r,130));action('write-confirm').onclick();await new Promise(r=>setTimeout(r,180));assert.equal(writes.length,2);
 assert.deepEqual(openedPaths,[]);action('open-target').onclick();assert.deepEqual(openedPaths,['/playlist/10']);assert.equal(walk(body.children[0].shadowRoot).find(e=>e.dataset.action==='workspace').hidden,true);instance.show();assert.equal(writes.length,2);
 action('finish').onclick();const finished=walk(body.children[0].shadowRoot);assert.equal(finished.find(e=>e.dataset.action==='workspace').hidden,false);assert.ok(finished.some(e=>e.dataset.page==='filter'));assert.equal(writes.length,2);
+const field=key=>{const node=walk(body.children[0].shadowRoot).find(e=>e.dataset.key===key);assert.ok(node,key);return node;};
+const settle=()=>new Promise(r=>setTimeout(r,280));
+action('nav-prepare').onclick();await settle();
+assert.ok(walk(field('source-select')).some(e=>e.label==='我创建的歌单'));assert.ok(walk(field('source-select')).some(e=>e.label==='我收藏的歌单'));
+const selectSource=async value=>{const node=field('source-select');node.value=value;await node.onchange();await settle();};
+await selectSource('20');assert.equal(instance.status().scan.total,2);assert.equal(instance.status().scan.phase,'paused');
+action('prepare').onclick();for(let tick=0;tick<120&&instance.status().scan.phase!=='complete';tick++)await new Promise(r=>setTimeout(r,30));await settle();assert.equal(instance.status().scan.processed,2);
+action('nav-prepare').onclick();await settle();await selectSource('favorites');assert.equal(instance.status().scan.total,3);assert.equal(instance.status().scan.phase,'complete');
+assert.match(body.children[0].shadowRoot.textContent,/本地缓存/);await selectSource('20');assert.equal(instance.status().scan.total,2);assert.equal(instance.status().scan.phase,'complete');
+await action('cache-clear-others').onclick();await settle();assert.equal(storage.has('ncm-organizer:v2:7:scan:20'),false);assert.equal(storage.has('ncm-organizer:v2:7:scan:8'),true);assert.ok(JSON.parse(storage.get('ncm-organizer:v1:7')).writeJournal);
+await selectSource('favorites');assert.equal(instance.status().scan.total,3);assert.equal(instance.status().scan.phase,'complete');
 assert.equal(instance.status().writeVerification,'unverified');assert.equal(JSON.stringify(instance.status()).includes('uid'),false);
 instance.remove();assert.equal(body.children.length,0);assert.equal(intervals.size,0);assert.equal(listeners.size,0);assert.equal(context.__ncmOrganizerV1,undefined);run();assert.notEqual(context.__ncmOrganizerV1,instance);context.__ncmOrganizerV1.remove();
 console.log(JSON.stringify({bundle:process.argv[2]??'work/dist/panel.js',syntheticTotal:3,processed:3,artistCoverage:2/3,writeRequests:writes.length,unconfirmedWrites:0,repeatWrites:0,renderedHTMLNodes:0,reuseRemoveReinject:'pass',rawStatusData:'absent',readCalls:calls.length}));

@@ -1,4 +1,5 @@
 import {coverage,type PanelController} from './panel';
+import {renderSource} from './source';
 import {canEnterPage,type WorkspaceState,type WorkspacePage} from './workspace-state';
 import {textElement,renderPreview} from './preview';
 import {renderFilters,FilterCandidateCache} from './filters';
@@ -27,6 +28,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   const eyebrow=textElement(doc,'span','YOUR COLLECTION, RECOMPOSED');
   const title=textElement(doc,'h2','');
   hero.append(eyebrow,title,textElement(doc,'p','读取收藏并准备筛选数据，用曲风、语种、歌手与节奏，整理属于你的歌单。'));
+  const sourceRegion=textElement(doc,'div','');let sourceSignature='';
   const status=textElement(doc,'section','');status.className='scan-status';
   const phase=textElement(doc,'h3',''),bar=doc.createElement('progress'),count=textElement(doc,'p','');
   const metrics=textElement(doc,'div','');metrics.className='metrics';metrics.dataset.action='scan-metrics';
@@ -39,10 +41,10 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   const suspended=new Map<string,HTMLElement>();
   for(const [key,label] of [['genres','曲风'],['bpm','BPM'],['language','语种']] as const){const node=textElement(doc,'p',`${label}来源暂不可用，可在更多中强制更新。`);suspended.set(key,node);details.append(node);}
   const journal=textElement(doc,'p','保留了一份写入日志，可通过“查看写入日志”显式恢复核对。');details.append(journal);
-  status.append(phase,bar,count,metrics,empty,message,details);box.append(hero,status);body.append(box);
+  status.append(phase,bar,count,metrics,empty,message,details);box.append(hero,sourceRegion,status);body.append(box);
   const pause=actionButton(doc,'暂停准备','pause',()=>controller.pause());
   const retry=actionButton(doc,'重试保存并继续','retry-storage',()=>controller.retryPersistence());
-  const pageOnly=actionButton(doc,'仅本页继续','page-only',()=>{controller.continuePageOnly();return controller.scan();});
+  const pageOnly=actionButton(doc,'仅本页继续','page-only',()=>{if(controller.continuePageOnly())return controller.scan();});
   const start=actionButton(doc,'开始整理','prepare',()=>{const s=controller.model.state;return s.snapshot&&s.progress.phase!=='complete'&&!controller.needsPreparation?controller.scan():controller.prepareCollection();});start.className='primary';
   const filter=actionButton(doc,'前往筛选','to-filter',()=>go('filter'));
   const saved=actionButton(doc,'查看写入日志','open-recovery',recovery);
@@ -51,6 +53,8 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   const button=(node:HTMLButtonElement,visible:boolean,disabled=false)=>{node.hidden=!visible;node.disabled=!visible||disabled;};
   prepareView={update(){
    const s=controller.model.state,p=s.progress,busy=controller.isBusy,hasProgress=!!s.snapshot||busy;
+   const sourceKey=JSON.stringify([s.uid,s.sourceCatalog,s.catalogStatus,s.history,s.historyInvalidCount,s.selectedSource,s.snapshot?.source,s.cacheView,s.cacheUpdatedAt,s.lastCompletedAt,s.sourceSwitch,busy,controller.isScanning,s.viewGeneration]);
+   if(sourceKey!==sourceSignature){sourceRegion.replaceChildren(renderSource(doc,controller));sourceSignature=sourceKey;}
    const resuming=busy&&p.phase==='paused'&&!controller.isPausing;
    text(title,s.snapshot?'让喜欢的音乐，各得其所。':'从喜欢，找到新的共鸣。');
    text(phase,busy?(controller.needsPreparation?'正在读取并核对收藏':resuming?'正在核对收藏':phaseText[p.phase]??'正在准备'):s.snapshot?phaseText[p.phase]:'准备你的音乐收藏');

@@ -27,7 +27,7 @@ const writer=createWriter({store,read:async(path,data)=>{
  if(path==='/api/v6/playlist/detail'){const ids=String(data.id)==='8'?s.ids:[...tracks];return {code:200,playlist:{...playlists.find(p=>String(p.id)===String(data.id)),trackCount:ids.length,trackIds:ids.map(id=>({id:Number(id)}))}};}
  throw new Error('Unexpected synthetic read');
  },write:async(path,data)=>{writes.push({path,data});if(scenario==='writing')await delay(1800);if(path==='/api/playlist/create'){playlists.push({id:10,name:String(data.name),specialType:0,privacy:10,subscribed:false,creator:{userId:7}});if(scenario==='uncertain')throw new ReadError('network');return {code:200,playlist:{id:10}};}for(const id of JSON.parse(String(data.trackIds)))tracks.add(String(id));return {code:200};}});
-const controller=new PanelController({store,scanner,writer,readLibrary:async()=>{await delay(100);return s;},readUid:async()=>account,readTargets:async()=>playlists.filter(p=>p.specialType===0).map(p=>({id:String(p.id),name:p.name,visibility:p.privacy===10?'private':'public'}))});
+const controller=new PanelController({listSources:async()=>({uid:'7',favoritesId:'8',created:[],collected:[]}),store,scanner,writer,readLibrary:async()=>{await delay(100);return s;},readUid:async()=>account,readTargets:async()=>playlists.filter(p=>p.specialType===0).map(p=>({id:String(p.id),name:p.name,visibility:p.privacy===10?'private':'public'}))});
 mountOrganizer({controller,openPlaylist:id=>{
  if(params.get('navigation')==='unavailable')return false;
  const destination=document.getElementById('preview-destination');if(!destination)return false;

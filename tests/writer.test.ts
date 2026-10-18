@@ -11,7 +11,7 @@ function plan(count=3, target:WritePlan['target']={kind:'new',name:'合成目标
   return {taskId:'synthetic-task',uid:'7',sourcePlaylistId:'8',sourceRevision:snapshot(count).revision,
     selectionVersion:'selection-1',songIds:snapshot(count).ids,target};
 }
-function confirmation(p:WritePlan):WriteConfirmation {return {uid:p.uid,sourceRevision:p.sourceRevision,selectionVersion:p.selectionVersion,targetKey:JSON.stringify(p.target),confirmedAt:1};}
+function confirmation(p:WritePlan):WriteConfirmation {return {uid:p.uid,sourcePlaylistId:p.sourcePlaylistId,sourceRevision:p.sourceRevision,selectionVersion:p.selectionVersion,targetKey:JSON.stringify(p.target),confirmedAt:1};}
 function fixture(count=3) {
   let uid='7'; let revision=snapshot(count).ids;
   const tracks=new Set<string>();const calls:{path:string;data:Record<string,unknown>}[]=[];
@@ -85,24 +85,24 @@ import { createScanner } from '../panel/scan/scan';
 function controllerFixture(count=3) {
   const f=fixture(count);const s=snapshot(count);
   const scanner=createScanner({readLibrary:async()=>s,readUid:async()=>'7',readMetadata:async()=>({genres:s.songs[0].genres,bpm:s.songs[0].bpm,language:s.songs[0].language}),store:f.store});
-  const c:any=new PanelController({readLibrary:async()=>s,readUid:async()=>'7',readTargets:(uid:string,source:string,s:AbortSignal)=>(targetUi as any).readTargets(f.read,uid,source,s),scanner,store:f.store,writer:f.make()} as any);
+  const c:any=new PanelController({listSources:async()=>({uid:'7',favoritesId:'8',created:[],collected:[]}),readLibrary:async()=>s,readUid:async()=>'7',readTargets:(uid:string,source:string,s:AbortSignal)=>(targetUi as any).readTargets(f.read,uid,source,s),scanner,store:f.store,writer:f.make()} as any);
   c.model.setLibrary(s);c.model.setProgress({phase:'complete',processed:count,total:count},true);
   c.model.setFilters({...c.model.state.filters,allSongs:true});c.model.setTarget({kind:'new',name:'合成目标',privacy:10});
   return {f,c};
 }
 test('UI preparation and changed selection never dispatch real writer transport without new final confirmation',async()=>{
   const {f,c}=controllerFixture();assert.equal(typeof c.prepareWrite,'function','UI write review not implemented');
-  c.prepareWrite();assert.equal(f.calls.length,0);
+  await c.prepareWrite();assert.equal(f.calls.length,0);
   c.model.manual('1','remove');await c.confirmWrite();assert.equal(f.calls.length,0);
-  c.prepareWrite();await c.confirmWrite();assert.equal(f.tracks.size,2);assert.deepEqual([...f.tracks],['2','3']);assert.equal(c.status().writeVerification,'unverified');c.remove();
+  await c.prepareWrite();await c.confirmWrite();assert.equal(f.tracks.size,2);assert.deepEqual([...f.tracks],['2','3']);assert.equal(c.status().writeVerification,'unverified');c.remove();
 });
 test('filter, manual and target edits during awaited add abort every later writer batch',async()=>{
   for(const mutate of [(c:any)=>c.model.manual('1','remove'),(c:any)=>c.model.setFilters({...c.model.state.filters,bpmMin:80}),(c:any)=>c.model.setTarget({kind:'new',name:'修改目标',privacy:10})]){
-    const {f,c}=controllerFixture(60);assert.equal(typeof c.prepareWrite,'function');f.onAdd(()=>mutate(c));c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,2);assert.equal(c.model.state.confirmation,null);assert.equal(c.model.state.writeReport.status,'paused');c.remove();
+    const {f,c}=controllerFixture(60);assert.equal(typeof c.prepareWrite,'function');f.onAdd(()=>mutate(c));await c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,2);assert.equal(c.model.state.confirmation,null);assert.equal(c.model.state.writeReport.status,'paused');c.remove();
   }
 });
 test('remove during issued add accounts for operation and schedules no later batches',async()=>{
-  const {f,c}=controllerFixture(60);assert.equal(typeof c.prepareWrite,'function');f.onAdd(()=>c.remove());c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,2);assert.equal(f.store.load('7')!.writeJournal!.batches[0].state,'uncertain');
+  const {f,c}=controllerFixture(60);assert.equal(typeof c.prepareWrite,'function');f.onAdd(()=>c.remove());await c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,2);assert.equal(f.store.load('7')!.writeJournal!.batches[0].state,'uncertain');
 });
 test('explicit candidate adoption requires a fresh target review and prevents another create',async()=>{
   const f=fixture();f.loseCreate();const p=plan(),w=f.make();await w.executeWrite(p,confirmation(p),signal(),()=>{});
@@ -126,17 +126,17 @@ test('actual confirmation renderer shows every selected song/manual flag and dis
   const {f,c}=controllerFixture(53);c.model.manual('1','add');c.model.state.snapshot.songs[0].name='<svg onload=alert(1)>';
   const doc=testDocument();assert.equal(typeof renderWriteControls,'function','final write controls not implemented');
   let root:any=renderWriteControls(doc,c);const all=(n:any):any[]=>[n,...n.children.flatMap(all)];
-  const review=all(root).find(n=>n.dataset.key==='write-review');assert.ok(review);review.onclick();assert.equal(f.calls.length,0);
+  const review=all(root).find(n=>n.dataset.key==='write-review');assert.ok(review);await review.onclick();assert.equal(f.calls.length,0);
   root=renderWriteControls(doc,c);const rows=all(root).filter(n=>n.dataset.songId);assert.equal(rows.length,50);const rest=all(renderWriteControls(doc,c,1)).filter(n=>n.dataset.songId);assert.equal(rest.length,3);assert.deepEqual([...rows,...rest].map(n=>n.dataset.songId),snapshot(53).ids);
   assert.match(root.textContent,/人工加入/);assert.match(root.textContent,/私密/);assert.match(root.textContent,/<svg onload=alert\(1\)>/);assert.equal(all(root).some(n=>n.tagName==='svg'),false);
   const button=all(root).find(n=>n.dataset.key==='write-confirm');assert.ok(button);await button.onclick();assert.equal(f.tracks.size,53);c.remove();
 });
 test('recovery UI exposes candidate choice without selecting or writing automatically',async()=>{
-  const {f,c}=controllerFixture();f.loseCreate();c.prepareWrite();await c.confirmWrite();const before=f.calls.length;
+  const {f,c}=controllerFixture();f.loseCreate();await c.prepareWrite();await c.confirmWrite();const before=f.calls.length;
   await c.reviewRecovery();assert.equal(f.calls.length,before);assert.equal(c.model.state.confirmation,null);assert.deepEqual(c.model.state.recoveryCandidates.map((p:any)=>p.id),['10']);
   const root:any=renderWriteControls(testDocument(),c);const all=(n:any):any[]=>[n,...n.children.flatMap(all)];
   const choice=all(root).find(n=>n.dataset.key==='recovery-10');assert.ok(choice);await choice.onclick();assert.equal(f.calls.length,before);assert.equal(c.model.state.confirmation,null);
-  c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.filter(c=>c.path==='/api/playlist/create').length,1);assert.equal(f.tracks.size,3);c.remove();
+  await c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.filter(c=>c.path==='/api/playlist/create').length,1);assert.equal(f.tracks.size,3);c.remove();
 });
 
 test('create rate limit pauses with one request and cannot blindly recreate',async()=>{
@@ -163,7 +163,7 @@ test('source changes during uncertain creation can be inspected and explicitly r
 });
 
 test('UI restored journal belongs only to its account and confirmation never restores',async()=>{
-  const {f,c}=controllerFixture();c.prepareWrite();await c.confirmWrite();assert.equal(c.model.state.confirmation,null);
+  const {f,c}=controllerFixture();await c.prepareWrite();await c.confirmWrite();assert.equal(c.model.state.confirmation,null);
   c.model.setAccount('9');assert.equal(c.model.state.recoveryJournal,null);assert.equal(c.model.state.writeProgress,null);assert.equal(c.model.state.writeReport,null);assert.equal(f.store.load('9'),null);assert.ok(f.store.load('7')!.writeJournal);c.remove();
 });
 test('every actual create/add sees a durable pending operation and completion persists its readback',async()=>{
@@ -179,8 +179,8 @@ test('every actual create/add sees a durable pending operation and completion pe
 });
 
 test('no-candidate unknown create permits a differently named explicit new plan only after fresh final click',async()=>{
-  const {f,c}=controllerFixture();f.loseCreate();c.prepareWrite();await c.confirmWrite();f.lists.pop();await c.reviewRecovery();assert.deepEqual(c.model.state.recoveryCandidates,[]);
-  c.model.setTarget({kind:'new',name:'明确重新计划',privacy:10});c.prepareWrite();assert.ok(c.model.state.writeReview);assert.equal(f.calls.length,1);
+  const {f,c}=controllerFixture();f.loseCreate();await c.prepareWrite();await c.confirmWrite();f.lists.pop();await c.reviewRecovery();assert.deepEqual(c.model.state.recoveryCandidates,[]);
+  c.model.setTarget({kind:'new',name:'明确重新计划',privacy:10});await c.prepareWrite();assert.ok(c.model.state.writeReview);assert.equal(f.calls.length,1);
   assert.equal(f.store.load('7')!.writeJournal!.creationState,'uncertain');
   await c.confirmWrite();assert.equal(f.calls.filter(c=>c.path==='/api/playlist/create').length,2);assert.equal(f.calls[1].data.name,'明确重新计划');c.remove();
 });
@@ -216,11 +216,11 @@ test('omitted-privacy recovery excludes public malformed and mismatched candidat
   }
 });
 test('source reorder at final confirmation clears collection rows/progress/approval but preserves recoverable journal',async()=>{
-  const {f,c}=controllerFixture();c.prepareWrite();const taskId=c.model.state.writeReview.taskId;f.setRevision(['3','2','1']);await c.confirmWrite();
+  const {f,c}=controllerFixture();await c.prepareWrite();const taskId=c.model.state.writeReview.taskId;f.setRevision(['3','2','1']);await c.confirmWrite();
   assert.equal(c.model.state.snapshot,null);assert.notEqual(c.model.state.progress.phase,'complete');assert.deepEqual(c.model.preview().ids,[]);
   assert.equal(c.model.state.confirmation,null);assert.equal(c.model.state.writeReview,null);assert.equal(c.model.state.writeProgress,null);assert.equal(c.model.state.writeReport,null);
   assert.match(c.model.state.message,/收藏.*变化/);assert.match(c.model.state.message,/重新读取/);assert.equal(f.calls.length,0);
-  assert.equal(f.store.load('7')!.writeJournal!.plan.taskId,taskId);c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,0);
+  assert.equal(f.store.load('7')!.writeJournal!.plan.taskId,taskId);await c.prepareWrite();await c.confirmWrite();assert.equal(f.calls.length,0);
   await c.readLibrary();assert.equal(c.model.state.recoveryJournal.plan.taskId,taskId);assert.equal(c.model.state.confirmation,null);c.remove();
 });
 

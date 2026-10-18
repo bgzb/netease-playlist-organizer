@@ -20,7 +20,7 @@ const metadata = (s: LibrarySnapshot) => {
   const { genres, bpm, language } = s.songs[0];
   return { genres, bpm, language };
 };
-function fixture() {
+async function fixture() {
   let account: unknown = { code: 200, profile: { userId: 7 } };
   let current = snapshot(2);
   let readGate: Promise<LibrarySnapshot> | undefined;
@@ -43,7 +43,7 @@ function fixture() {
       started.resolve(); return metadataGate ?? metadata(current);
     }, store });
   const writer = createWriter({ read, store, write: async () => { writes++; throw Error('Unauthorized write'); } });
-  const controller = new PanelController({ readLibrary: async () => current, readUid: reader.readUid,
+  const controller = new PanelController({listSources:async()=>({uid:'7',favoritesId:'8',created:[],collected:[]}), readLibrary: async () => current, readUid: reader.readUid,
     readTargets: async () => [], scanner, store, writer });
   controller.model.setLibrary(current);
   controller.model.setProgress({ phase: 'complete', processed: 2, total: 2 }, true);
@@ -53,7 +53,7 @@ function fixture() {
   store.save('7', { schemaVersion: 1, uid: '7', scan: {
     snapshot: current, completedIds: [], cache: {}, phase: 'paused', updatedAt: 1,
   }, writeJournal: null });
-  controller.prepareWrite();
+  await controller.prepareWrite();
   return { controller, scanner, store, storage, reader, writer, started,
     writes: () => writes, setAccount: (value: unknown) => { account = value; },
     setCurrent: (s: LibrarySnapshot) => { current = s; },
@@ -73,7 +73,7 @@ function assertRevoked(c: PanelController) {
 }
 
 test('explicit guest null/null is login loss in both library and writer account guards', async () => {
-  const f = fixture(); f.setAccount(guest);
+  const f = await fixture(); f.setAccount(guest);
   await assert.rejects(f.reader.readUid(), (e: unknown) => e instanceof ReadError && e.kind === 'login');
   const plan = f.controller.model.state.writeReview!;
   await assert.rejects(f.writer.recover(plan, new AbortController().signal),
@@ -98,7 +98,7 @@ test('account parser validates both identity shapes and rejects malformed or con
 
 for (const boundary of ['idle', 'confirm', 'recovery'] as const) {
   test(`guest ${boundary} revokes all exposed approval state and preserves original durable data`, async () => {
-    const f = fixture(), before = f.store.load('7')!;
+    const f = await fixture(), before = f.store.load('7')!;
     f.setAccount(guest);
     if (boundary === 'idle') await f.controller.checkAccount();
     if (boundary === 'confirm') await f.controller.confirmWrite();
@@ -113,7 +113,7 @@ for (const boundary of ['idle', 'confirm', 'recovery'] as const) {
 }
 
 test('guest after issued metadata clears exposure and cannot overwrite old account checkpoint', async () => {
-  const f = fixture(), gate = deferred<ReturnType<typeof metadata>>();
+  const f = await fixture(), gate = deferred<ReturnType<typeof metadata>>();
   f.setMetadataGate(gate.promise);
   const before = f.store.load('7');
   const pending = f.controller.scan(); await f.started.promise;
@@ -124,9 +124,9 @@ test('guest after issued metadata clears exposure and cannot overwrite old accou
 });
 
 test('guest to a new account cannot recover the old account journal, and old login may revalidate it', async () => {
-  const f = fixture(); const old = f.store.load('7')!;
+  const f = await fixture(); const old = f.store.load('7')!;
   f.setAccount(guest); await f.controller.checkAccount(); assertRevoked(f.controller);
-  const next = { ...snapshot(2), uid: '9', sourcePlaylistId: '10' };
+  const next = snapshot(2,'9','10');
   f.setCurrent(next); f.setAccount({ code: 200, profile: { userId: 9 } });
   await f.controller.readLibrary(); await f.controller.reviewRecovery();
   assert.equal(f.controller.model.state.uid, '9');
@@ -141,10 +141,10 @@ test('guest to a new account cannot recover the old account journal, and old log
 });
 
 test('every publication during delayed new-account scan remains scoped to the new account and source', async () => {
-  const f = fixture(); await f.controller.scan();
+  const f = await fixture(); await f.controller.scan();
   assert.equal(f.scanner.result?.uid, '7');
   const before = f.store.load('7');
-  const next = { ...snapshot(2), uid: '9', sourcePlaylistId: '10' };
+  const next = snapshot(2,'9','10');
   f.setCurrent(next); f.setAccount({ code: 200, profile: { userId: 9 } });
   await f.controller.readLibrary();
   f.controller.model.setFilters({ ...f.controller.model.state.filters, allSongs: true });
@@ -161,8 +161,8 @@ test('every publication during delayed new-account scan remains scoped to the ne
   assert.ok(observed.every(s => s.uid === '9' && s.snapshotUid === '9' && s.source === '10'), JSON.stringify(observed));
   assert.equal(f.controller.model.state.filters.allSongs, true);
   assert.equal(f.controller.model.state.added.has('1'), true);
-  assert.deepEqual(f.store.load('7'), before); assert.equal(f.store.load('9')!.scan!.snapshot.uid, '9');
-  assert.equal(f.store.load('9')!.writeJournal, null); assert.equal(f.writes(), 0);
+  assert.deepEqual(f.store.load('7'), before); assert.equal(f.store.loadScan('9','10')!.checkpoint.snapshot.uid, '9');
+  assert.equal(f.store.loadWriteJournal('9')?.writeJournal??null, null); assert.equal(f.writes(), 0);
   f.controller.remove();
 });
 
@@ -187,7 +187,7 @@ for (const boundary of ['identity', 'metadata'] as const) test(`observed ${bound
       if (boundary === 'metadata') { guestObserved = true; throw new MetadataReadError(new ReadError('login'), result); }
       return result;
     } });
-  const c = new PanelController({ readLibrary: async () => s, readUid, readTargets: async () => [], scanner, store });
+  const c = new PanelController({listSources:async()=>({uid:'7',favoritesId:'8',created:[],collected:[]}), readLibrary: async () => s, readUid, readTargets: async () => [], scanner, store });
   c.model.setLibrary(s);
   const afterGuest: (string | null)[] = [];
   c.subscribe(() => {
@@ -206,7 +206,7 @@ for (const boundary of ['identity', 'metadata'] as const) test(`observed ${bound
 });
 
 test('controller ignores wrong account, source and generation publications even from the current scanner', async () => {
-  const f = fixture(), next = { ...snapshot(2), uid: '9', sourcePlaylistId: '10' };
+  const f = await fixture(), next = snapshot(2,'9','10');
   f.setCurrent(next); f.setAccount({ code: 200, profile: { userId: 9 } });
   await f.controller.readLibrary();
   const scan = f.scanner.scan.bind(f.scanner);
@@ -227,7 +227,7 @@ test('controller ignores wrong account, source and generation publications even 
   assert.ok(observed.length > 3);
   assert.ok(observed.every(row => row.startsWith('9/10/') && !row.includes('STALE_GENERATION')), JSON.stringify(observed));
   assert.equal(f.controller.model.state.progress.phase, 'complete');
-  assert.equal(f.writes(), 0); assert.equal(f.store.load('9')!.writeJournal, null);
+  assert.equal(f.writes(), 0); assert.equal(f.store.loadWriteJournal('9')?.writeJournal??null, null);
   assert.equal(f.store.load('7')!.writeJournal!.plan.uid, '7');
   f.controller.remove();
 });
@@ -253,18 +253,18 @@ for (const loss of ['guest', 'accountChanged', 'storage'] as const) {
       readMetadata: async () => { throw new MetadataReadError(new ReadError('network'), metadata(s)); } });
     const writer = createWriter({ store, read: async () => guest,
       write: async () => { writes++; throw Error('Unauthorized synthetic write'); } });
-    const c = new PanelController({ readLibrary: async () => s, readUid: reader.readUid,
+    const c = new PanelController({listSources:async()=>({uid:'7',favoritesId:'8',created:[],collected:[]}), readLibrary: async () => s, readUid: reader.readUid,
       readTargets: async () => [], scanner, store, writer });
     c.model.setLibrary(s);
     c.model.setProgress({ phase: 'complete', processed: 1, total: 1 }, true);
     c.model.setFilters({ ...c.model.state.filters, allSongs: true });
     c.model.manual('1', 'add');
     c.model.setTarget({ kind: 'new', name: '合成最终检查点', privacy: 10 });
-    c.prepareWrite();
+    await c.prepareWrite();checks=0;
     const plan = c.model.state.writeReview!;
     assert.ok(plan);
     c.model.state.confirmation = { uid: plan.uid, sourceRevision: plan.sourceRevision,
-      selectionVersion: plan.selectionVersion, targetKey: JSON.stringify(plan.target), confirmedAt: 1 };
+      sourcePlaylistId:plan.sourcePlaylistId, selectionVersion: plan.selectionVersion, targetKey: JSON.stringify(plan.target), confirmedAt: 1 };
     const durable = store.load('7');
     const exposure = () => {
       const state = c.model.state;

@@ -25,6 +25,9 @@ export async function runScanBenchmark(modules: Modules, count = 1419, delayMs =
   };
   const store = new modules.LocalStore(memoryStorage());
   const load = store.load.bind(store), save = store.save.bind(store);
+  const loadScan=store.loadScan?.bind(store),saveScan=store.saveScan?.bind(store);
+  if(loadScan)store.loadScan=(uid,pid)=>{const start=performance.now();try{return loadScan(uid,pid);}finally{stages.checkpointMs+=performance.now()-start;}};
+  if(saveScan)store.saveScan=(uid,pid,state)=>{const start=performance.now();try{saveScan(uid,pid,state);checkpointSaves++;}finally{stages.checkpointMs+=performance.now()-start;}};
   store.load = uid => {
     const start = performance.now();
     try { return load(uid); } finally { stages.checkpointMs += performance.now() - start; }
@@ -49,7 +52,7 @@ export async function runScanBenchmark(modules: Modules, count = 1419, delayMs =
   maxConcurrentRequests = 0;
   const scanner = modules.createScanner({
     store, now: () => 1_000_000,
-    readLibrary: () => timed('libraryMs', () => library.readLibrary()),
+    readLibrary: (id,signal) => timed('libraryMs', () => library.readLibrary({kind:'playlist',id},signal)),
     readUid: () => timed('identityMs', () => library.readUid()),
     readMetadata: () => timed('metadataMs', () => request(async () => {
       metadataReads++;
@@ -67,7 +70,7 @@ export async function runScanBenchmark(modules: Modules, count = 1419, delayMs =
   assert.equal(output.songs.length, count);
   assert.ok(output.songs.every((song, position) => song.position === position && song.genres.status === 'known'
     && song.bpm.status === 'known' && song.language.status === 'known'));
-  assert.equal(load(input.uid)?.scan?.completedIds.length, count);
+  assert.equal(loadScan?loadScan(input.uid,input.sourcePlaylistId)?.checkpoint.completedIds.length:load(input.uid)?.scan?.completedIds.length, count);
   assert.ok(maxConcurrentRequests <= 2);
   return {totalMs, stages, processed: count, metadataReads, checkpointSaves, maxConcurrentRequests};
 }

@@ -20,6 +20,7 @@ function entryLabel(state:WorkspaceState,controller:PanelController):string {
   const s=controller.model.state,op=controller.uiOperation;
   if(controller.isBusy){
     if(controller.isPausing)return '正在暂停';
+    if(controller.operationKind==='source')return '正在读取来源';
     if(controller.operationKind==='write')return '正在写入核对';
     if(controller.operationKind==='recovery')return '正在恢复核对';
     if(s.progress.phase==='reading'||controller.needsPreparation)return '正在读取核对';
@@ -39,6 +40,7 @@ function operationNotice(controller:PanelController):string {
   const op=controller.uiOperation,s=controller.model.state;
   if(!op)return '';
   if(op.status==='succeeded'){
+    if(op.kind==='source')return '来源已载入，可继续扫描或筛选';
     if(op.kind==='write')return canEnterPage('result',controller)?'歌单整理完成，已读回核对':'写入仍需核对，请查看详情';
     if(op.kind==='recovery')return '恢复核对完成，请重新审阅清单';
     return s.snapshot?.ids.length?'收藏准备完成，可以筛选歌曲':'收藏中暂无歌曲';
@@ -55,15 +57,15 @@ function createController():PanelController{
   if(!report.supported||!report.read||!report.desktopWiki){
     const fail=async():Promise<never>=>{throw new ReadError('structure');};
     const scanner=createScanner({readLibrary:fail,readUid:fail,readMetadata:fail,store});
-    const controller=new PanelController({readLibrary:fail,readUid:fail,readTargets:fail,scanner,store},false);
+    const controller=new PanelController({readLibrary:fail,listSources:fail,readUid:fail,readTargets:fail,scanner,store},false);
     controller.model.state.message='当前客户端能力缺失或候选不唯一，已停止读取。支持版本：Mac 3.1.1 / build 3019。';return controller;
   }
   const read=report.read;let operationSignal:AbortSignal|undefined;
   const library=createLibraryReader((path,data,signal)=>{checkPause(signal??operationSignal);return read(path,data,signal??operationSignal);});
   const identity=createLibraryReader(read);
   const metadata=createMetadataReader(read,report.desktopWiki);
-  const scanner=createScanner({readLibrary:library.readLibrary,readUid:identity.readUid,readMetadata:metadata.readMetadata,resetMetadataErrors:metadata.resetErrors,store});
-  const deps:PanelDependencies={readLibrary:async signal=>{operationSignal=signal;return library.readLibrary();},readUid:signal=>createLibraryReader((path,data)=>read(path,data,signal)).readUid(),readTargets:(uid,sourceId,signal)=>readTargets(read,uid,sourceId,signal),scanner,store,...(report.write?{writer:createWriter({read,write:report.write,store})}:{}),setSignal:signal=>{operationSignal=signal;}};
+  const scanner=createScanner({readLibrary:(id,signal)=>library.readLibrary({kind:'playlist',id},signal),readUid:identity.readUid,readMetadata:metadata.readMetadata,resetMetadataErrors:metadata.resetErrors,store});
+  const deps:PanelDependencies={readLibrary:async (source,signal)=>{operationSignal=signal;return library.readLibrary(source,signal);},listSources:signal=>library.listSources(signal),readUid:signal=>createLibraryReader((path,data)=>read(path,data,signal)).readUid(),readTargets:(uid,sourceId,signal)=>readTargets(read,uid,sourceId,signal),scanner,store,...(report.write?{writer:createWriter({read,write:report.write,store})}:{}),setSignal:signal=>{operationSignal=signal;}};
   return new PanelController(deps);
 }
 export function mountOrganizer(options:{document?:Document;scope?:Scope;controller?:PanelController;openPlaylist?:(id:string)=>boolean}={}):OrganizerInstance{
@@ -104,6 +106,6 @@ export function mountOrganizer(options:{document?:Document;scope?:Scope;controll
   const onKey=(event:KeyboardEvent)=>{if(event.key!=='Escape'||state.collapsed)return;const path=event.composedPath?.()??[];if(!path.includes(host)&&!path.includes(panel))return;if(state.moreMenuOpen){state.moreMenuOpen=false;more.focus();}else if(state.detailSongId){state.detailSongId=null;controller.changed();}else if(state.filterPanelOpen){state.filterPanelOpen=false;controller.changed();}else state.collapsed=true;render();if(state.collapsed)entry.focus();};
   const onUnload=()=>instance.remove();doc.defaultView?.addEventListener('beforeunload',onUnload);doc.addEventListener('visibilitychange',onVisibility);doc.addEventListener('keydown',onKey);
   const instance:OrganizerInstance={show(){if(removed)return;if(state.collapsed)applyAmbientTheme(host,resolveAmbientTheme(doc));state.collapsed=false;render();void controller.checkAccount();},remove(){if(removed)return;removed=true;controller.remove();doc.defaultView?.removeEventListener('beforeunload',onUnload);unsubscribe();clearInterval(accountTimer);clearInterval(metricsTimer);if(renderTimer!==undefined)clearTimeout(renderTimer);if(toastTimer!==undefined)clearTimeout(toastTimer);doc.removeEventListener('visibilitychange',onVisibility);doc.removeEventListener('keydown',onKey);view.dispose();entry.onclick=null;host.remove();if(scope.__ncmOrganizerV1===instance)delete scope.__ncmOrganizerV1;},status:()=>controller.status()};
-  scope.__ncmOrganizerV1=instance;render();return instance;
+  scope.__ncmOrganizerV1=instance;render();if(!options.controller)void controller.initialize();return instance;
 }
 if(typeof window!=='undefined'&&typeof document!=='undefined')mountOrganizer();
