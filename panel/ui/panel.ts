@@ -1,3 +1,4 @@
+import {PresetError,type FilterPreset} from '../scan/presets';
 import type { Filters, FilterResult, LibrarySnapshot, Progress, SongRecord, WriteConfirmation, WritePlan, WriteJournal, WriteProgress, WriteReport,SourceSelection,SourceCatalog,ScanSummary,StoredPlaylistScan } from '../core/model';
 import { buildSelectionVersion, filterSongs, resolveSelection } from '../core/filter';
 import { validateSnapshot,id } from '../client/library';
@@ -76,8 +77,47 @@ export function coverage(songs:SongRecord[]):{artists:number;genres:number;bpm:n
   return result;
 }
 export type PanelDependencies={now?:()=>number;readLibrary:(source:SourceSelection,signal:AbortSignal)=>Promise<LibrarySnapshot>;listSources:(signal:AbortSignal)=>Promise<SourceCatalog>;readUid:(signal?:AbortSignal)=>Promise<string>;readTargets:(uid:string,sourceId:string,signal:AbortSignal)=>Promise<TargetOption[]>;scanner:Scanner;store:LocalStore;writer?:Writer;setSignal?:(signal:AbortSignal|undefined)=>void};
-export type UiOperation = { id:number; kind:'prepare'|'scan'|'write'|'recovery'|'source'; status:'running'|'succeeded'|'paused'|'failed' };
+export type UiOperation = { id:number; kind:'prepare'|'scan'|'write'|'recovery'|'source'|'maintenance'; status:'running'|'succeeded'|'paused'|'failed' };
 export class PanelController {
+  private toolsRevision=0;
+  private toolsNotice:{uid:string;text:string}|null=null;
+  private appliedArtists:{uid:string;names:Record<string,string>}|null=null;
+  get savedToolsVersion():number{return this.toolsRevision;}
+  get managementNotice():string|null{return this.toolsNotice?.uid===this.model.state.uid?this.toolsNotice.text:null;}
+  get presetArtistNames():Record<string,string>{return this.appliedArtists?.uid===this.model.state.uid?this.appliedArtists.names:{};}
+  presetCatalog():{items:FilterPreset[];error:string|null}{
+    const uid=this.model.state.uid;if(!uid)return {items:[],error:null};
+    try{return {items:this.deps.store.listPresets(uid),error:null};}catch{return {items:[],error:'筛选方案无法读取，原数据已保留。'};}
+  }
+  cacheInventory(){
+    const uid=this.model.state.uid;if(!uid)return {items:[],error:null};
+    try{return {items:this.deps.store.listScanCaches(uid),error:null};}catch{return {items:[],error:'缓存列表读取失败，请重试。'};}
+  }
+  private async manageLocal(action:(uid:string)=>void,success:string):Promise<void>{
+    const uid=this.model.state.uid;if(!uid||this.isBusy)return;
+    this.toolsNotice=null;
+    await this.run(async signal=>{await this.guard(uid,signal);action(uid);this.toolsRevision++;this.toolsNotice={uid,text:success};},'maintenance');
+  }
+  async savePreset(name:string):Promise<void>{
+    const filters=copyJson(this.model.state.filters),names={...this.presetArtistNames};
+    for(const song of this.model.state.snapshot?.songs??[])for(const artist of song.artists.value??[])if(filters.artistIds.includes(artist.id))names[artist.id]=artist.name;
+    await this.manageLocal(uid=>{this.deps.store.savePreset(uid,name,filters,names);},'筛选方案已保存，可在本账号的其他歌单套用。');
+  }
+  async renamePreset(presetId:string,name:string):Promise<void>{await this.manageLocal(uid=>this.deps.store.renamePreset(uid,presetId,name),'方案已重命名。');}
+  async deletePreset(presetId:string):Promise<void>{await this.manageLocal(uid=>this.deps.store.deletePreset(uid,presetId),'方案已删除。');}
+  applyPreset(presetId:string):boolean{
+    const uid=this.model.state.uid;if(!uid||this.isBusy||!this.model.state.snapshot)return false;
+    const item=this.presetCatalog().items.find(p=>p.id===presetId);if(!item)return false;
+    this.model.state.added.clear();this.model.state.removed.clear();this.model.setFilters(item.filters);
+    this.appliedArtists={uid,names:{...item.artistNames}};this.toolsRevision++;this.toolsNotice={uid,text:'方案已套用，人工选歌已重置；无匹配项的条件仍保留。'};this.changed();return true;
+  }
+  async deleteScanCache(pid:string):Promise<void>{
+    await this.manageLocal(uid=>{
+      this.deps.store.deleteScan(uid,pid);this.deps.scanner.discardSource(uid,pid);
+      if(this.model.state.snapshot?.sourcePlaylistId===pid)this.model.clearLibrary();
+      this.refreshHistory();
+    },'该歌单扫描缓存已删除；筛选方案、写入日志和真实歌单保留。');
+  }
   readonly progressMeter=new ScanProgressMeter();
   private now():number{return this.deps.now?.()??performance.now();}
   get scanMetrics(){return this.progressMeter.snapshot(this.now());}
@@ -155,7 +195,11 @@ export class PanelController {
       await work(operation.signal);
     } catch (error) {
       failed=true;
-      if (this.alive) this.error(error);
+      if (this.alive){
+        if(kind==='maintenance'&&!(error instanceof ReadError&&['accountChanged','login','paused'].includes(error.kind))){
+          this.toolsNotice={uid:this.model.state.uid??'',text:error instanceof PresetError?error.message:'本地数据操作未完成，已保留可用数据，请重试。'};
+        }else this.error(error);
+      }
     } finally {
       if (this.operation === operation) {
         this.operation = null;

@@ -73,6 +73,12 @@ export class Scanner {
     this.forceNext=false;
   }
 
+  discardSource(uid:string,pid:string):void {
+    if(this.running)throw new ReadError('paused');
+    const key=id(uid)+':'+id(pid);this.memories.delete(key);
+    if(this.activeKey===key){this.activeKey=undefined;this.result=null;this.status={phase:'paused',processed:0,total:0,persisted:false};}
+  }
+
   hasUnsavedResult(uid:string,pid:string):boolean {
     const memory=this.memories.get(id(uid)+':'+id(pid));return !!(memory?.last&&memory.dirty);
   }

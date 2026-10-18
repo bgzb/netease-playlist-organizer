@@ -1,3 +1,5 @@
+import {listPresets,savePreset,renamePreset,deletePreset} from './presets';
+import type {Filters} from '../core/model';
 import type {PersistedState,SongRecord,Field,Source,LibrarySnapshot,WriteJournal,WritePlan,ScanCheckpoint,CacheEntry,PlaylistDescriptor,StoredPlaylistScan,ScanSummary} from '../core/model';
 import {id,validateSnapshot} from '../client/library';import {object,ReadError} from '../client/requests';
 export type StorageLike=Pick<Storage,'length'|'key'|'getItem'|'setItem'|'removeItem'>;
@@ -48,6 +50,7 @@ function storedScan(value:unknown,uid:string,pid:string):StoredPlaylistScan {
   if(Object.keys(scan.cache).some(key=>!allowed.has(key)))throw new ReadError('structure');
   return {schemaVersion:2,uid,source,checkpoint:scan,lastCompletedAt:o.lastCompletedAt===null?null:number(o.lastCompletedAt)};
 }
+export type ScanCacheInfo={source:PlaylistDescriptor;phase:ScanCheckpoint['phase'];processed:number;total:number;updatedAt:number|null;lastCompletedAt:number|null;byteSize:number;invalid:boolean};
 export class LocalStore {
   // Cache only the last successfully stored bytes and an encoded, detached journal.
   // A different account, external writer, deletion or corrupt value invalidates the hit.
@@ -66,6 +69,32 @@ export class LocalStore {
   private writeEnvelope(uid:string,value:Record<string,unknown>):void {
     try{this.storage.setItem(PREFIX+id(uid),JSON.stringify(value));this.savedJournal=undefined;}
     catch{throw new ReadError('storage');}
+  }
+  listPresets(uid:string){return listPresets(this.storage,uid);}
+  savePreset(uid:string,name:string,filters:Filters,artistNames:Record<string,string>){return savePreset(this.storage,uid,name,filters,artistNames);}
+  renamePreset(uid:string,presetId:string,name:string):void{renamePreset(this.storage,uid,presetId,name);}
+  deletePreset(uid:string,presetId:string):void{deletePreset(this.storage,uid,presetId);}
+  listScanCaches(uid:string):ScanCacheInfo[]{
+    const account=id(uid),prefix=SCANS+account+':scan:',rows:ScanCacheInfo[]=[];
+    for(let i=0;i<this.storage.length;i++){
+      const key=this.storage.key(i);if(!key?.startsWith(prefix))continue;
+      const pid=key.slice(prefix.length);try{if(id(pid)!==pid)continue;}catch{continue;}
+      const raw=this.storage.getItem(key);if(raw===null)continue;const byteSize=(key.length+raw.length)*2;
+      try{const scan=storedScan(JSON.parse(raw),account,pid),c=scan.checkpoint;rows.push({source:scan.source,phase:c.phase,processed:c.completedIds.length,total:c.snapshot.ids.length,updatedAt:c.updatedAt,lastCompletedAt:scan.lastCompletedAt,byteSize,invalid:false});}
+      catch{rows.push({source:{id:pid,name:'无法读取的歌单缓存',creatorUid:account},phase:'error',processed:0,total:0,updatedAt:null,lastCompletedAt:null,byteSize,invalid:true});}
+    }
+    return rows.sort((a,b)=>(b.updatedAt??0)-(a.updatedAt??0)||a.source.id.localeCompare(b.source.id));
+  }
+  deleteScan(uid:string,pid:string):void{
+    const account=id(uid),source=id(pid),legacy=this.envelope(account);
+    if(legacy?.scan){
+      // Only the source identity is needed. A damaged, unrelated checkpoint must
+      // neither block an independent cache deletion nor be discarded with it.
+      let legacySource:string|null=null;
+      try{legacySource=id(obj(obj(legacy.scan).snapshot).sourcePlaylistId);}catch{/* Preserve unidentifiable legacy data. */}
+      if(legacySource===source)this.writeEnvelope(account,{schemaVersion:1,uid:account,scan:null,writeJournal:journal(legacy.writeJournal,account)});
+    }
+    try{this.storage.removeItem(this.scanKey(account,source));if(this.storage.getItem(this.scanKey(account,source))!==null)throw new Error('retained');}catch{throw new ReadError('storage');}
   }
   loadScan(uid:string,pid:string):StoredPlaylistScan|null {
     try{const account=id(uid),source=id(pid),raw=this.storage.getItem(this.scanKey(account,source));return raw===null?null:storedScan(JSON.parse(raw),account,source);}

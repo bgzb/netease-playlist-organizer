@@ -5,7 +5,7 @@ import {textElement} from './preview';
 const drafts=new WeakMap<PanelController,{value:string;generation:number}>();
 const date=(value:number|null)=>value===null?'暂无':new Date(value).toLocaleString('zh-CN',{hour12:false});
 
-export function renderSource(doc:Document,controller:PanelController):HTMLElement {
+export function renderSource(doc:Document,controller:PanelController,options:{manageCache?:()=>void}={}):HTMLElement {
   const state=controller.model.state,box=textElement(doc,'section','');box.className='source';
   box.append(textElement(doc,'h2','来源歌单'));
   const select=doc.createElement('select');select.dataset.key='source-select';select.setAttribute('aria-label','选择扫描来源歌单');
@@ -55,5 +55,6 @@ export function renderSource(doc:Document,controller:PanelController):HTMLElemen
   for(const [key,label,scope] of [['cache-clear-others','清除非我喜欢歌单缓存','exceptFavorites'],['cache-clear-all','清除全部扫描缓存','all']] as const){
     const button=textElement(doc,'button',label);button.dataset.key=key;button.disabled=controller.isBusy||!state.uid;button.onclick=()=>controller.clearCache(scope);cleanup.append(button);
   }
+  if(options.manageCache){const manage=textElement(doc,'button','管理扫描缓存');manage.dataset.key='cache-manager-open';manage.disabled=controller.isBusy||!state.uid;manage.onclick=()=>{if(!manage.disabled)options.manageCache!();};cleanup.append(manage);}
   box.append(cleanup);return box;
 }

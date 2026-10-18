@@ -45,6 +45,12 @@ async function init(){
  if(scenario==='scanning'){void controller.prepareCollection();return;}
  await controller.prepareCollection();if(scenario==='storage-error')return;
  controller.model.setFilters({...controller.model.state.filters,...(dense?{bpmMin:80}:{genres:['独立流行']})});controller.changed();
+ if(scenario==='presets'){await controller.savePreset('日常独立流行');controller.model.setFilters({...controller.model.state.filters,genres:[],languages:['日语'],bpmMin:80,bpmMax:120});await controller.savePreset('日语 · 中速');controller.changed();return;}
+ if(scenario==='cache-manager'){
+  const extra=snapshot(12,'7','20');extra.source={id:'20',name:'夏日漫游 · 合成歌单',creatorUid:'99'};
+  store.saveScan('7','20',{schemaVersion:2,uid:'7',source:extra.source,checkpoint:{snapshot:extra,cache:{},completedIds:extra.ids.slice(0,5),phase:'paused',updatedAt:Date.now()-86400000},lastCompletedAt:null});
+  await controller.refreshSources();click('nav-prepare');click('cache-manager-open');return;
+ }
  if(scenario==='filter'||dense){if(params.has('detail')){const row=root().querySelector('.song') as HTMLElement;row?.click();}return;}
  if(scenario==='account-changed'){account='9';await controller.checkAccount();return;}
  click('to-write');if(scenario==='target')return;click('target-new');click('write-review');

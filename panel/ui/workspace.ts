@@ -1,3 +1,5 @@
+import {renderPresets} from './presets';
+import {renderCacheManager} from './cache-manager';
 import {coverage,type PanelController} from './panel';
 import {renderSource} from './source';
 import {canEnterPage,type WorkspaceState,type WorkspacePage} from './workspace-state';
@@ -11,6 +13,7 @@ export function actionButton(doc:Document,label:string,key:string,action:()=>unk
 const phaseText:Record<string,string>={reading:'正在读取收藏',scanning:'正在扫描元数据',pausing:'正在暂停',paused:'已暂停',complete:'准备完成',error:'准备遇到问题'};
 export const duration=(ms:number)=>ms<60000?`${Math.floor(ms/1000)} 秒`:`${Math.floor(ms/60000)} 分 ${Math.floor(ms/1000)%60} 秒`;
 export function createWorkspaceView(doc:Document,root:HTMLElement,controller:PanelController,options:{openPlaylist?:(id:string)=>boolean}={}):{update(state:WorkspaceState):void;dispose():void}{
+ let cacheManagerOpen=false;let cacheAccount:string|null=null;
  let prepareView:{update():void}|null=null;let prepareOperationId=0;let renderedContext:string|null=null;
  let state:WorkspaceState;let signature='';let filterIdentity='';let lastFilters='';let previewView:ReturnType<typeof renderPreview>|null=null;let disposed=false;let targetMode:'new'|'existing'|null=null;let reviewPage=0;let reviewTask:string|null=null;let viewContext:string|null=null;const searches:Record<string,string>={};const candidatePages:Record<string,number>={};const candidateCache=new FilterCandidateCache();
  const nav=textElement(doc,'nav','');nav.className='stages';nav.setAttribute('aria-label','整理阶段');
@@ -53,8 +56,8 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   const button=(node:HTMLButtonElement,visible:boolean,disabled=false)=>{node.hidden=!visible;node.disabled=!visible||disabled;};
   prepareView={update(){
    const s=controller.model.state,p=s.progress,busy=controller.isBusy,hasProgress=!!s.snapshot||busy;
-   const sourceKey=JSON.stringify([s.uid,s.sourceCatalog,s.catalogStatus,s.history,s.historyInvalidCount,s.selectedSource,s.snapshot?.source,s.cacheView,s.cacheUpdatedAt,s.lastCompletedAt,s.sourceSwitch,busy,controller.isScanning,s.viewGeneration]);
-   if(sourceKey!==sourceSignature){sourceRegion.replaceChildren(renderSource(doc,controller));sourceSignature=sourceKey;}
+   const sourceKey=JSON.stringify([s.uid,s.sourceCatalog,s.catalogStatus,s.history,s.historyInvalidCount,s.selectedSource,s.snapshot?.source,s.cacheView,s.cacheUpdatedAt,s.lastCompletedAt,s.sourceSwitch,busy,controller.isScanning,s.viewGeneration,cacheManagerOpen,controller.savedToolsVersion,controller.managementNotice]);
+   if(sourceKey!==sourceSignature){sourceRegion.replaceChildren(renderSource(doc,controller,{manageCache:()=>{cacheManagerOpen=true;sourceSignature='';changed();}}));if(cacheManagerOpen)sourceRegion.append(renderCacheManager(doc,controller,()=>{cacheManagerOpen=false;sourceSignature='';changed();}));sourceSignature=sourceKey;}
    const resuming=busy&&p.phase==='paused'&&!controller.isPausing;
    text(title,s.snapshot?'让喜欢的音乐，各得其所。':'从喜欢，找到新的共鸣。');
    text(phase,busy?(controller.needsPreparation?'正在读取并核对收藏':resuming?'正在核对收藏':phaseText[p.phase]??'正在准备'):s.snapshot?phaseText[p.phase]:'准备你的音乐收藏');
@@ -85,7 +88,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
   if(state.page==='filter'){
    const toggle=actionButton(doc,'筛选条件','toggle-filters',()=>{state.filterPanelOpen=!state.filterPanelOpen;changed();});toggle.className='filter-toggle';toggle.setAttribute('aria-expanded',String(state.filterPanelOpen));body.append(toggle);
    const layout=textElement(doc,'div','');layout.className='filter-layout';layout.dataset.filters=String(state.filterPanelOpen);
-   const filterContent=renderFilters(doc,controller.model,{searches,pages:candidatePages,cache:candidateCache,changed:()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();}});const sidebar=textElement(doc,'section','');sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close,filterContent);
+   const filterContent=renderFilters(doc,controller.model,{artistNames:controller.presetArtistNames,searches,pages:candidatePages,cache:candidateCache,changed:()=>{state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;changed();}});const sidebar=textElement(doc,'section','');sidebar.className='filter-sidebar';const close=actionButton(doc,'完成筛选 ×','close-filters',()=>{state.filterPanelOpen=false;changed();});close.className='filter-close';sidebar.append(close,renderPresets(doc,controller),filterContent);
    previewView=renderPreview(doc,controller.model,{state,changed});layout.append(sidebar,previewView.element);body.append(layout);
    const summary=textElement(doc,'div','');summary.className='selection-summary';summary.dataset.action='selection-summary';footer.append(summary);if(s.recoveryJournal)footer.append(actionButton(doc,'恢复写入','open-recovery',recovery));const next=actionButton(doc,'下一步：选择歌单','to-write',()=>go('write'),!canEnterPage('write',controller));next.className='primary';footer.append(next);
   }
@@ -115,10 +118,10 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
  }
  function updateMetrics(){const metrics=body.querySelector('[data-action="scan-metrics"]');if(!metrics)return;const m=controller.scanMetrics;metrics.textContent=`本次用时 ${duration(m.elapsedMs)}  ·  ${m.ratePerMinute===null?'速度正在估算':`${Math.round(m.ratePerMinute)} 首/分钟`}  ·  ${m.remainingMs===null?'剩余时间暂不可估算':m.remainingMs===0?'准备完成':`预计剩余约 ${duration(m.remainingMs)}`}`;}
  function update(next:WorkspaceState){
-  if(disposed)return;state=next;const contextChanged=viewContext!==state.contextKey;if(contextChanged){candidateCache.clear();for(const key of Object.keys(candidatePages))delete candidatePages[key];for(const key of Object.keys(searches))delete searches[key];viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
+  if(disposed)return;state=next;if(cacheAccount!==controller.model.state.uid){cacheManagerOpen=false;cacheAccount=controller.model.state.uid;}const contextChanged=viewContext!==state.contextKey;if(contextChanged){candidateCache.clear();for(const key of Object.keys(candidatePages))delete candidatePages[key];for(const key of Object.keys(searches))delete searches[key];viewContext=state.contextKey;targetMode=null;reviewPage=0;reviewTask=null;}if(state.collapsed)return;const s=controller.model.state;
   const filters=JSON.stringify(s.filters);if(lastFilters&&filters!==lastFilters){state.pages={matched:0,unknown:0,unmatched:0};state.detailSongId=null;}lastFilters=filters;
-  const filterKey=JSON.stringify([state.contextKey,controller.model.libraryVersion,filters,state.resultGroup,state.pages,state.filterPanelOpen]);
-  const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.writeNotice,controller.isBusy]);
+  const filterKey=JSON.stringify([state.contextKey,controller.model.libraryVersion,filters,state.resultGroup,state.pages,state.filterPanelOpen,controller.savedToolsVersion,controller.isBusy,controller.managementNotice]);
+  const key=JSON.stringify([state.page,state.contextKey,state.resultGroup,state.pages,state.detailSongId,state.filterPanelOpen,s.selectionVersion,s.progress,s.message,s.writeReview,s.writeProgress,s.writeReport,s.recoveryCandidates,controller.writeNotice,controller.isBusy,controller.savedToolsVersion,cacheManagerOpen,controller.managementNotice]);
   const filterStable=state.page==='filter'&&body.dataset.page==='filter'&&filterIdentity===filterKey&&previewView;
   const prepareStable=state.page==='prepare'&&body.dataset.page==='prepare'&&prepareView&&(renderedContext===state.contextKey||controller.uiOperation?.id===prepareOperationId&&controller.uiOperation?.kind==='prepare'&&controller.uiOperation?.status==='running'&&!controller.needsAttention);
   if(key!==signature&&prepareStable){prepareView?.update();signature=key;renderedContext=state.contextKey;for(const page of ['prepare','filter','write','result'] as const){const b=findKey(`nav-${page}`) as HTMLButtonElement|null;if(b){b.disabled=!canEnterPage(page,controller);b.title=b.disabled?(page==='result'?'完成写入并读回核对后可查看':'请先完成准备，并选择有效歌曲'):'';}}}

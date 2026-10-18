@@ -21,6 +21,7 @@ function entryLabel(state:WorkspaceState,controller:PanelController):string {
   if(controller.isBusy){
     if(controller.isPausing)return '正在暂停';
     if(controller.operationKind==='source')return '正在读取来源';
+    if(controller.operationKind==='maintenance')return '正在管理本地数据';
     if(controller.operationKind==='write')return '正在写入核对';
     if(controller.operationKind==='recovery')return '正在恢复核对';
     if(s.progress.phase==='reading'||controller.needsPreparation)return '正在读取核对';
@@ -39,6 +40,7 @@ function entryLabel(state:WorkspaceState,controller:PanelController):string {
 function operationNotice(controller:PanelController):string {
   const op=controller.uiOperation,s=controller.model.state;
   if(!op)return '';
+  if(op.kind==='maintenance')return controller.managementNotice??'本地数据操作未完成，请重试。';
   if(op.status==='succeeded'){
     if(op.kind==='source')return '来源已载入，可继续扫描或筛选';
     if(op.kind==='write')return canEnterPage('result',controller)?'歌单整理完成，已读回核对':'写入仍需核对，请查看详情';
