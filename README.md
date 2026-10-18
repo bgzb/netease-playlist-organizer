@@ -4,29 +4,29 @@
 
 <h1 align="center">网易云歌单整理</h1>
 
-<p align="center">从「我喜欢的音乐」中，整理出你想听的歌单。</p>
+<p align="center">从喜欢的歌单中，整理出你想听的音乐。</p>
 
 <p align="center">
-  <a href="https://github.com/bgzb/netease-playlist-organizer/releases/download/v1.0.0/netease-playlist-organizer-1.0.0-macos-arm64.zip"><strong>下载 Mac 应用</strong></a>
-  · <a href="https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.0">发布说明</a>
+  <a href="https://github.com/bgzb/netease-playlist-organizer/releases/download/v1.0.1/netease-playlist-organizer-1.0.1-macos-arm64.zip"><strong>下载 Mac 应用</strong></a>
+  · <a href="https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.1">发布说明</a>
   · <a href="docs/INSTALL.md">安装帮助</a>
 </p>
 
-<p align="center">1.0.0 · Apple Silicon · macOS 13 及以上 · MIT 开源</p>
+<p align="center">1.0.1 · Apple Silicon · macOS 13 及以上 · MIT 开源</p>
 
 喜欢的歌越来越多，想找出其中的日语摇滚、慢节奏民谣，或某几位歌手的作品？网易云歌单整理可以在 Mac 网易云客户端里读取收藏，按条件筛选、预览，再将选中的歌曲整理到新歌单或已有歌单中。
 
 **原收藏保留。** 整理只向目标歌单追加歌曲，不删除或重排「我喜欢的音乐」。普通使用无需安装 Node.js、Python，也无需配置 API Key。
 
-## 本地开发中的任意歌单升级
+## 1.0.1 更新
 
-当前源码在已发布 1.0.0 界面与图标基础上新增单来源扫描：默认我喜欢，也可从创建/收藏列表、扫描历史选择，或输入歌单 ID / 完整分享链接读取他人的可访问歌单。选择后先展示该来源缓存，手动继续或强制更新；短链接需先打开并复制完整链接/ID。无权限或列表不完整会提示并保留缓存。
+支持单来源扫描：默认我喜欢，也可从创建/收藏列表、扫描历史选择，或输入歌单 ID / 完整分享链接读取他人的可访问歌单。选择后先展示该来源缓存，手动继续或强制更新；短链接需先打开并复制完整链接/ID。无权限或列表不完整会提示并保留缓存。
 
 扫描缓存按账号和歌单分别保存，兼容迁移旧缓存；支持清除全部或仅非我喜欢歌单缓存，保留写入恢复日志。切换来源先暂停并保存，保存失败停留当前来源；写入仍仅面向本人可写目标。四步工作区、主题、候选分页、右下角入口及图标保留。
 
 筛选页支持将条件命名为方案，按账号保存、跨歌单套用，并可重命名或删除。方案只保存条件；套用会重置人工选歌，并使旧的写入确认失效。来源区的“管理扫描缓存”逐个显示歌单进度、保存时间和估算占用，支持单独删除；清理缓存会保留筛选方案及写入日志。
 
-这是尚未发布的本地构建 6；下方 v1.0.0 下载链接仍指向原正式发布。
+修复所有面板输入框需要长按退格才能删字的问题，单按删除、空格和常用编辑快捷键恢复正常。清理扫描缓存后仍可查看保留的写入日志，跨来源恢复时会继续留在恢复流程中。
 
 ## 可以做什么
 
@@ -51,9 +51,9 @@
 
 ### 2. 下载应用
 
-前往 **[v1.0.0 发布页](https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.0)**，在附件中下载 **「网易云歌单整理应用.zip」**，也可以点击上方「下载 Mac 应用」直接下载。
+前往 **[v1.0.1 发布页](https://github.com/bgzb/netease-playlist-organizer/releases/tag/v1.0.1)**，在附件中下载 **「网易云歌单整理应用.zip」**，也可以点击上方「下载 Mac 应用」直接下载。
 
-应用附件文件名为 `netease-playlist-organizer-1.0.0-macos-arm64.zip`；「网易云歌单整理源码.zip」的文件名为 `netease-playlist-organizer-1.0.0-source.zip`。源码 ZIP 与 GitHub 自动提供的 Source code 面向开发者，普通使用请选择应用 ZIP。发布附件还提供 `SHA256SUMS.txt`，用于校验下载文件。
+应用附件文件名为 `netease-playlist-organizer-1.0.1-macos-arm64.zip`；「网易云歌单整理源码.zip」的文件名为 `netease-playlist-organizer-1.0.1-source.zip`。源码 ZIP 与 GitHub 自动提供的 Source code 面向开发者，普通使用请选择应用 ZIP。发布附件还提供 `SHA256SUMS.txt`，用于校验下载文件。
 
 ### 3. 解压并安装
 
@@ -67,7 +67,7 @@
 
 ## 第一次整理
 
-1. **准备收藏**：点击「开始整理」，读取并核对完整收藏，随后扫描歌曲元数据。期间可以暂停或收起面板。
+1. **准备收藏**：默认读取「我喜欢」，也可选择创建、收藏或历史歌单，或输入歌单 ID / 完整分享链接。点击「开始整理」，读取并核对完整来源，随后扫描歌曲元数据；期间可以暂停或收起面板。
 2. **筛选歌曲**：选择曲风、语种、歌手或 BPM 范围，查看匹配结果，并勾选调整。不同维度同时满足，同一维度中的多个选项满足其一即可；想整理全部收藏时，需明确选择「全部收藏」。
 3. **选择去处**：新建私密歌单，或选择自己已有的可写歌单。
 4. **审阅并确认**：检查完整入选清单、目标和隐私设置，再确认写入。清单分页只影响显示，不限制实际入选数量。
