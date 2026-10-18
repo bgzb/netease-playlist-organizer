@@ -18,7 +18,7 @@ function fixture(){
   const writer=createWriter({store,read:async()=>({code:200,profile:{userId:uid}}),write:async()=>{throw Error('unexpected synthetic write');}});
   const controller=new PanelController({readLibrary,listSources,readUid:async()=>uid,readTargets:async()=>[],scanner,store,writer});
   const save=(pid='8')=>{const s=snapshot(2,'7',pid);const value:StoredPlaylistScan={schemaVersion:2,uid:'7',source:s.source!,checkpoint:{snapshot:s,cache:{},completedIds:['1','2'],phase:'complete',updatedAt:100},lastCompletedAt:100};store.saveScan('7',pid,value);};
-  return {controller,scanner,store,storage,started,gate,save,delay:()=>delay=true,calls:()=>calls,bReads:()=>bReads,setUid:(v:string)=>uid=v,failCatalog:()=>catalogFailure=true,failReads:()=>readFailure=true};
+  return {controller,scanner,store,storage,started,gate,save,delay:()=>delay=true,calls:()=>calls,bReads:()=>bReads,setUid:(v:string)=>uid=v,failCatalog:()=>catalogFailure=true,failReads:()=>readFailure=true,allowReads:()=>readFailure=false};
 }
 test('initialization restores favorites cache without starting metadata and same source preserves choices',async()=>{
   const f=fixture();f.save();assert.equal(typeof f.controller.initialize,'function');
@@ -92,4 +92,10 @@ test('quota failure restores genuine v1 favorites without a descriptor or new ne
   f.store.save('7',{schemaVersion:1,uid:'7',scan:{snapshot:s,cache:{},completedIds:['1','2'],phase:'complete',updatedAt:100},writeJournal:null});
   const raw=f.storage.getItem('ncm-organizer:v1:7');f.storage.setItem=()=>{throw Error('full');};f.failReads();await f.controller.initialize();
   assert.equal(f.controller.model.state.snapshot?.sourcePlaylistId,'8');assert.deepEqual(f.controller.model.state.snapshot?.songs[0].genres.value,['旧标签']);assert.equal(f.controller.model.state.cacheView,'cached');assert.equal(f.controller.model.state.catalogStatus,'error');assert.equal(f.storage.getItem('ncm-organizer:v1:7'),raw);
+});
+
+test('failed force refresh stays bound to its source instead of invalidating the next cache',async()=>{
+ const f=fixture();await f.controller.initialize();await f.controller.selectSource({kind:'playlist',id:'9'});await f.controller.scan();
+ await f.controller.selectSource({kind:'playlist',id:'8'});await f.controller.scan();f.failReads();await f.controller.readLibrary();await f.controller.forceRefresh();
+ f.allowReads();await f.controller.selectSource({kind:'playlist',id:'9'});const before=f.calls();await f.controller.scan();assert.equal(f.calls(),before);
 });

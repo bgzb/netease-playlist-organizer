@@ -18,7 +18,8 @@ export function reconcileWorkspace(state:WorkspaceState,c:PanelController):Works
  const key=s.snapshot?JSON.stringify([s.uid,s.snapshot.sourcePlaylistId,s.snapshot.revision]):s.uid;
  let next={...state,pages:{...state.pages}};
  if(key!==state.contextKey){
-   next={...createWorkspaceState(),collapsed:state.collapsed,contextKey:key,handledOperationId:state.contextKey===null&&key!==null&&op?.kind==='prepare'?state.handledOperationId:op?.id??state.handledOperationId};
+   const pendingRecovery=op?.kind==='recovery'&&op.id>state.handledOperationId&&!!s.snapshot&&s.recoveryJournal?.plan.uid===s.uid;
+   next={...createWorkspaceState(),collapsed:state.collapsed,contextKey:key,handledOperationId:pendingRecovery||state.contextKey===null&&key!==null&&op?.kind==='prepare'?state.handledOperationId:op?.id??state.handledOperationId};
    // A context acquired by a running prepare may consume its completion later.
    if(op?.status==='running')next.handledOperationId=op.id-1;
  }
@@ -26,8 +27,9 @@ export function reconcileWorkspace(state:WorkspaceState,c:PanelController):Works
    next.handledOperationId=op.id;
    if(op.status==='succeeded'&&(op.kind==='prepare'||op.kind==='scan')&&canEnterPage('filter',c))next.page='filter';
    if(op.status==='succeeded'&&op.kind==='write'&&canEnterPage('result',c))next.page='result';
+   if(op.status==='succeeded'&&op.kind==='recovery'&&s.recoveryReviewed&&s.snapshot&&s.recoveryJournal?.plan.uid===s.uid){next.page='write';next.recoveryMode=true;}
  }
- const explicitRecovery=next.page==='write'&&(next.recoveryMode||c.isBusy&&c.operationKind==='recovery')&&!!s.snapshot&&s.recoveryJournal?.plan.uid===s.uid&&(!c.isBusy||c.operationKind==='recovery'||c.operationKind==='write');
+ const explicitRecovery=next.page==='write'&&(next.recoveryMode||c.isBusy&&c.operationKind==='recovery')&&s.recoveryJournal?.plan.uid===s.uid&&(!c.isBusy||c.operationKind==='recovery'||c.operationKind==='write');
  if(explicitRecovery)next.recoveryMode=true;
  if(!explicitRecovery&&!canEnterPage(next.page,c))next.page=c.isWriting&&s.snapshot?'write':'prepare';
  return next;

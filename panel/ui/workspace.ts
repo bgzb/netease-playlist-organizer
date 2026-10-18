@@ -21,7 +21,7 @@ export function createWorkspaceView(doc:Document,root:HTMLElement,controller:Pan
  const findKey=(key:string):HTMLElement|null=>{const visit=(node:Element):HTMLElement|null=>{if((node as HTMLElement).dataset?.key===key)return node as HTMLElement;for(const child of Array.from(node.children)){const match=visit(child);if(match)return match;}return null;};return visit(root);};
  const focusHeading=()=>{const title=body.querySelector('h2');if(title){title.tabIndex=-1;title.focus();}};
  function go(page:WorkspacePage){if(!canEnterPage(page,controller))return;if(page==='filter'){controller.model.state.writeReview=null;controller.model.state.confirmation=null;}state.page=page;state.recoveryMode=false;state.detailSongId=null;state.filterPanelOpen=false;changed();}
- function recovery(){if(!controller.model.state.snapshot||!controller.model.state.recoveryJournal||controller.isBusy)return;state.recoveryMode=true;state.page='write';state.detailSongId=null;changed();}
+ function recovery(){if(!controller.model.state.recoveryJournal||controller.isBusy)return;state.recoveryMode=true;state.page='write';state.detailSongId=null;changed();}
  function prepare(){
   const box=textElement(doc,'section','');box.className='prepare-page';
   const hero=textElement(doc,'div','');hero.className='hero';

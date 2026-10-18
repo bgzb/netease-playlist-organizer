@@ -493,7 +493,7 @@ export class PanelController {
     },'recovery');
   }
   pause():void{if(this.operation&&!this.pausing){this.pausing=true;this.progressMeter.pause(this.now());if(this.operationKind==='prepare'||this.operationKind==='scan')this.model.state.progress.phase='pausing';this.model.state.message='正在暂停，等待已发出的请求收尾。';this.operation.abort();this.changed();}}
-  async forceRefresh():Promise<void>{if(this.isBusy||!this.model.state.snapshot)return;this.deps.scanner.forceRefresh();this.model.state.confirmation=null;await this.scan();}
+  async forceRefresh():Promise<void>{const snapshot=this.model.state.snapshot;if(this.isBusy||!snapshot)return;this.deps.scanner.forceRefresh(snapshot.uid,snapshot.sourcePlaylistId);this.model.state.confirmation=null;await this.scan();}
   async retryPersistence():Promise<void>{const snapshot=this.model.state.snapshot;if(this.isBusy||!snapshot)return;this.deps.scanner.retryPersistence(snapshot.uid,snapshot.sourcePlaylistId);await this.scan();}
   continuePageOnly():boolean{
     const snapshot=this.model.state.snapshot;if(this.isBusy||this.preparationIncomplete||!snapshot||this.model.state.progress.phase!=='paused')return false;

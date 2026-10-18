@@ -44,8 +44,11 @@ export class Scanner {
 
   constructor(private readonly options: ScanOptions) {}
 
-  forceRefresh(): void {
-    this.forceNext = true;
+  forceRefresh(uid?:string,pid?:string): void {
+    if((uid===undefined)!==(pid===undefined))throw new ReadError('structure');
+    const key=uid!==undefined&&pid!==undefined?id(uid)+':'+id(pid):this.activeKey;
+    if(key){const memory=this.memories.get(key)??{cache:{},last:null,force:false,volatile:false,dirty:false};memory.force=true;this.memories.set(key,memory);}
+    else this.forceNext = true;
     this.options.resetMetadataErrors?.();
   }
 
